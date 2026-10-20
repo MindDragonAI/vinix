@@ -447,12 +447,12 @@ Firefox is an upstream GTK/X11 application rather than a native ui2 client. It
 runs on a private Xvfb display whose live XWD framebuffer is composited into a
 normal movable Vinix window. Pointer and keyboard events cross the same compact
 input bridge used by the other hosted X11 applications, so the native desktop
-and taskbar remain active while Firefox runs. Images carry Firefox's Vinix
-policy files but neither the browser nor X11: the first-run app page and `pkg
-install firefox` install the browser, and pkg brings Xvfb, the input bridge and
-the direct `startx` launcher with it (`--with-firefox` builds both into an
-image). A native error window remains as a runtime fallback when the browser or
-X11 is missing.
+and taskbar remain active while Firefox runs. The amd64 release ISO and
+`make desktop-amd64` include Firefox and X11. Compact images carry Firefox's
+Vinix policy files; the first-run app page and `pkg install firefox` install the
+browser, and pkg brings Xvfb, the input bridge and the direct `startx` launcher
+with it (`--with-firefox` builds both into an image). A native error window
+remains as a runtime fallback when the browser or X11 is missing.
 The direct launcher writes Firefox's upstream graphics and GTK diagnostics to
 `/var/log/firefox.log`. On an M1 image with the Asahi runtime, direct Xorg can
 enable glamor/DRI3 and Firefox WebRender over X11 EGL. The embedded window uses
@@ -1158,11 +1158,27 @@ microbenchmark. Those host timings do not measure physical framebuffer writes.
 
 ## Building and running
 
-ui2 is not vendored; check out its current VML version beside the sources,
-where the build points V's module path. Compile-time `$vml` also requires a
-current V3 compiler; set `V=/path/to/current/v3` when it is not your default:
+ui2 is not vendored. Both desktop build scripts and AArch64 preparation use
+`build-support/resolve-ui2.v`: `VINIX_UI2_SOURCE` takes precedence, followed by
+a sibling `../ui2` with `v.mod`, then the automatic `third_party/ui2` checkout.
+The automatic source is pinned to
+`293e845e2bf2557c7100996d82fcc23160e57dd9`, fetched by exact SHA without
+depending on the default branch. Existing automatic checkouts must be clean
+(including untracked and ignored files) and at that SHA; unexpected trees are
+rejected without being changed. Move an old automatic checkout aside to fetch
+the pin, or explicitly select it with `VINIX_UI2_SOURCE=/path/to/ui2`.
+Explicit and sibling sources remain caller owned: they are checked for VML
+inputs but never fetched, reset or required to match the pin.
+Concurrent automatic fetches use `third_party/ui2.lock`. If a builder crashes,
+remove that lock only after confirming no resolver remains active.
 
-    git clone https://github.com/vlang/ui2 third_party/ui2
+This pin bounds the existing `stage_ui2` compatibility rewrites: it is the last
+revision before `59d092e` added clipboard calls to deprecated `os.execute`;
+`f6a2123` put `g_key_modifiers` behind the nonheadless backend, and later `fd1aa4b` changed
+dialog `execute` beyond the existing rewrite. Moving upstream `main` can
+therefore break desktop C translation even when VML files are present.
+Overrides may need their own compatibility work. Compile-time `$vml` also
+requires a current V3 compiler; select it explicitly when needed:
 
     V=/path/to/current/v3 ./scripts/run-desktop-aarch64.sh
 
@@ -1304,9 +1320,13 @@ sysroot taken from the userland image, and stages
 starts the desktop directly. `scripts/run-aarch64.sh` boots any image named by
 `VINIX_INITRAMFS`, and with none boots the ordinary shell.
 
-The equivalent amd64 workflow is:
+For an amd64 desktop with X11 and Firefox, stage the package layers, build and boot:
 
-    ./scripts/run-desktop-amd64.sh
+    ./scripts/build-x11-amd64.sh
+    ./scripts/build-firefox-amd64.sh
+    ./scripts/build-network-tools-amd64.sh
+    make desktop-amd64
+    ./scripts/run-desktop-amd64.sh --no-build
 
 It extracts Alpine's prebuilt x86_64 userland and toolchain packages, then
 creates a dedicated `vinix-desktop-amd64.iso`; no mlibc or custom GCC bootstrap
@@ -1315,6 +1335,13 @@ absolute `/dev/pointer` ABI as the aarch64 input drivers, so the compositor and
 its applications use the same input path on both architectures. Pass
 `--no-build` to boot an existing image. Clang cross-compiles the same image on
 Apple Silicon, where QEMU runs it with TCG.
+
+For a compact image with apps installed on demand, use
+`./scripts/build-desktop-amd64.sh` followed by the same `--no-build` boot command.
+`./scripts/run-desktop-amd64.sh` without `--no-build` also builds the compact image.
+Arm64 defaults are unchanged. Browser-equipped amd64 images must pass the V
+packaging validator before archiving; see [release images](../README.md#release-images)
+for its host dependency, tests and the separate guest launch check.
 
 An existing `build-aarch64-hyprland/staging` layer remains available without
 changing the ordinary desktop session. Produce that layer with

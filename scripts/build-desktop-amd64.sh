@@ -15,6 +15,7 @@
 #   --with-firefox  also stage Firefox and its GTK/media runtime from
 #                   ./scripts/build-firefox-amd64.sh; otherwise the first-run
 #                   app page offers the browser through pkg (implies --with-x11)
+#                   Required by make desktop-amd64 and the amd64 release ISO.
 #   --with-x11      keep X11 in the image; otherwise pkg installs it with the
 #                   first graphical application. VINIX_AMD64_X11_BUNDLE=FILE.tar.gz
 #                   writes the bundle it installs.
@@ -61,15 +62,8 @@ done
 V="${V:-}"
 . "$SCRIPT_DIR/build-support/find-v.sh"
 
-if [ -n "${VINIX_UI2_SOURCE:-}" ]; then
-    UI2_SOURCE="$VINIX_UI2_SOURCE"
-elif [ -f "$SCRIPT_DIR/../ui2/v.mod" ]; then
-    # A sibling development checkout is the source requested by local Vinix
-    # work; packaged/CI builds retain the conventional third_party fallback.
-    UI2_SOURCE="$SCRIPT_DIR/../ui2"
-else
-    UI2_SOURCE="$SCRIPT_DIR/third_party/ui2"
-fi
+UI2_SOURCE="$(sh "$SCRIPT_DIR/build-support/run-v-tool.sh" \
+    "$SCRIPT_DIR/build-support/resolve-ui2.v" "$SCRIPT_DIR")"
 
 # pkg with apk, curl and git. X.org with Mesa and LLVM, Firefox with its GTK
 # and media runtime, Python, and V with TCC only on request.
@@ -123,17 +117,6 @@ if [ -z "$CLANG" ] || [ -z "$LLVM_STRIP" ] || ! command -v ld.lld >/dev/null 2>&
     echo "ERROR: clang, ld.lld, and llvm-strip (or strip) are required." >&2
     exit 1
 fi
-if [ ! -f "$UI2_SOURCE/v.mod" ]; then
-    echo "ERROR: ui2 not found at $UI2_SOURCE. Clone it at third_party/ui2:" >&2
-    echo "    git clone https://github.com/vlang/ui2 third_party/ui2" >&2
-    exit 1
-fi
-if [ ! -f "$UI2_SOURCE/ui/vml_compiled.v" ] || \
-   [ ! -f "$UI2_SOURCE/examples/calculator/calculator.vml" ]; then
-    echo "ERROR: this ui2 checkout has no compile-time VML support; update it." >&2
-    exit 1
-fi
-
 echo "==> Staging Alpine's prebuilt amd64 userland and toolchain..."
 VINIX_AMD64_USERLAND_BUILD_DIR="$USERLAND_DIR" VINIX_ALPINE_DEVTOOLS=1 \
     "$SCRIPT_DIR/scripts/build-userland-amd64.sh"
@@ -375,6 +358,10 @@ if [ "$WITH_FIREFOX" -eq 0 ] &&
     echo "ERROR: desktop image has Firefox without --with-firefox" >&2
     exit 1
 fi
+if [ "$WITH_FIREFOX" -eq 1 ]; then
+    "$SCRIPT_DIR/build-support/run-v-tool.sh" \
+        "$SCRIPT_DIR/build-support/check-desktop-firefox.v" "$STAGING"
+fi
 
 # One immutable multicall image, with the same per-application process names as
 # the aarch64 desktop image.
@@ -412,8 +399,9 @@ if [ "$WITH_V" -eq 1 ]; then
 fi
 
 # The X11 that pkg installs onto an image built without it (vinix-pkg's
-# install_x11): the layer and its launcher, less every path this image already
-# has, so that installing it never replaces a system file.
+# install_x11): the layer and its launcher, less paths already in the image.
+# For a full image, prune against the base userland so the bundle remains usable
+# on compact builds. pkg skips any other destination file that already exists.
 if [ -n "$X11_BUNDLE" ]; then
     echo "==> Building the X11 bundle $X11_BUNDLE"
     X11_ROOT="$BUILD_DIR/x11-bundle-root"
@@ -423,8 +411,12 @@ if [ -n "$X11_BUNDLE" ]; then
     install -m755 "$SCRIPT_DIR/build-support/xorg-server/startx" "$X11_ROOT/usr/bin/startx"
     rm -f "$X11_ROOT"/usr/lib/libOSMesa.so* "$X11_ROOT"/usr/lib/libGLU.so* \
         "$X11_ROOT"/usr/lib/libxatracker.so*
+    X11_BASE="$STAGING"
+    if [ "$WITH_X11" -eq 1 ]; then
+        X11_BASE="$SYSROOT"
+    fi
     (cd "$X11_ROOT" && find . ! -type d) | while IFS= read -r x11_path; do
-        if [ -e "$STAGING/$x11_path" ] || [ -L "$STAGING/$x11_path" ]; then
+        if [ -e "$X11_BASE/$x11_path" ] || [ -L "$X11_BASE/$x11_path" ]; then
             rm -f "$X11_ROOT/$x11_path"
         fi
     done
@@ -435,8 +427,8 @@ if [ -n "$X11_BUNDLE" ]; then
     fi
     mkdir -p "$(dirname "$X11_BUNDLE")"
     X11_BUNDLE_TMP="$(mktemp "$(dirname "$X11_BUNDLE")/.x11-bundle.XXXXXX")"
-    COPYFILE_DISABLE=1 tar --format=ustar --uid 0 --gid 0 --uname root --gname root \
-        -czf "$X11_BUNDLE_TMP" -C "$X11_ROOT" .
+    sh "$SCRIPT_DIR/build-support/run-v-tool.sh" \
+        "$SCRIPT_DIR/build-support/archive-x11-bundle.v" "$X11_ROOT" "$X11_BUNDLE_TMP"
     mv -f "$X11_BUNDLE_TMP" "$X11_BUNDLE"
     if command -v sha256sum >/dev/null 2>&1; then
         (cd "$(dirname "$X11_BUNDLE")" && sha256sum "$(basename "$X11_BUNDLE")")
