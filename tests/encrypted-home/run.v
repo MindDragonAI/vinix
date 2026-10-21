@@ -52,7 +52,7 @@ fn main() {
 	// fixtures, independently of its unrelated library-AES oracle API.
 	kernel := work + '/kernel'
 	os.cp_all(root + '/tests/storage-volumes/hostfixtures', kernel, false) or { panic(err) }
-	for path in ['fs/storage_control.v', 'fs/storage_health.v', 'fs/storage_crypt.v', 'fs/storage_format.v',
+	for path in ['fs/storage_control.v', 'fs/storage_health.v', 'fs/storage_crypt.v', 'fs/storage_format.v', 'fs/storage_mount.v',
 		'aesxts/core.v', 'resource/block_health.v', 'resource/block_health_arm64.v',
 		'resource/block_health_amd64.v', 'resource/block_status.v', 'resource/block_discard.v',
 		'resource/block_identity.v', 'security/device_policy.v'] {
@@ -60,6 +60,9 @@ fn main() {
 		os.cp(root + '/kernel/' + path, kernel + '/' + path) or { panic(err) }
 	}
 	os.write_file(kernel + '/v.mod', "Module { name: 'home_kernel_host' }\n") or { panic(err) }
+	policy := os.read_file(root + '/kernel/fs/block_policy.v') or { panic(err) }
+	reservation := function(policy, 'begin_block_device_mount') or { panic(err) }
+	os.write_file(kernel + '/fs/block_mount_reservation.v', 'module fs\nimport resource\nimport security\n' + reservation) or { panic(err) }
 	os.cp(root + '/tests/storage-volumes/volume_test.v', kernel + '/fs/volume_test.v') or { panic(err) }
 	run(v, ['-nocache', '-enable-globals', '-cc', 'clang', '-o', work + '/mapper-test', kernel + '/fs/volume_test.v']) or { eprintln(err); exit(1) }
 	run(work + '/mapper-test', []) or { eprintln(err); exit(1) }

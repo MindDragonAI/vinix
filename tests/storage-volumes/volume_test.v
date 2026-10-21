@@ -120,6 +120,35 @@ fn encryption_key() [64]u8 {
 }
 
 __global home_format_calls int
+
+fn test_home_mount_source_only_direct_block_filesystem_endpoint() {
+	_, mut descriptor := fixture(960)
+	key := encryption_key()
+	assert !volume_filesystem_source(unsafe { nil }, 'ext2')
+	mut raw := VFSNode{resource: descriptor.handle.resource}
+	assert !volume_filesystem_source(&raw, 'ext2')
+	assert create_encrypted_volume(mut descriptor, VolumeRequest{slot: 62, length: 4096}, &key) or { -1 } == 0
+	mut node := VFSNode{resource: logical_volumes[62].box}
+	assert volume_filesystem_source(&node, 'ext2')
+	assert volume_filesystem_source(&node, 'ext4')
+	assert !volume_filesystem_source(&node, 'tmpfs')
+	assert !volume_filesystem_source(&node, 'overlay')
+	// Mount admission prevents both removal and overlapping geometry changes.
+	token := begin_volume_filesystem_mount(&node, 'ext2') or { panic('mount reservation') }
+	assert token >= 0
+	assert change_logical_volume(mut logical_volumes[62], volume_remove, VolumeRequest{}) or { -1 } == -1
+	assert change_logical_volume(mut logical_volumes[62], volume_resize, VolumeRequest{length: 8192}) or { -1 } == -1
+	security.finish_block_mount(token, false)
+	logical_volumes[62].l.acquire()
+	logical_volumes[62].removed = true
+	logical_volumes[62].l.release()
+	assert begin_volume_filesystem_mount(&node, 'ext2') or { -2 } == -2
+	logical_volumes[62].l.acquire()
+	logical_volumes[62].removed = false
+	logical_volumes[62].l.release()
+	assert change_logical_volume(mut logical_volumes[62], volume_remove, VolumeRequest{}) or { -1 } == 0
+}
+
 fn home_test_formatter(node &VFSNode, _ string) bool {
 	home_format_calls++
 	mut backend := node.resource
