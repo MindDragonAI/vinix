@@ -46,3 +46,25 @@ v -d m15_selftest -o /absolute/controller-selftest tests/fullstack/controller.v
 
 Guest execution and Linux compilation must be performed by the parent. Local
 macOS validation can check V types and run the transport-only selftests.
+
+Source-root preparation is a separate, diagnostic-ISO-only controller:
+
+```sh
+v -prod -o /absolute/source_provision tests/fullstack/source_provision.v
+/absolute/source_provision /absolute/receipts /absolute/diagnostic.iso
+# Only for this controller's existing, stopped disposable source:
+/absolute/source_provision /absolute/receipts /absolute/diagnostic.iso --resume
+```
+
+It creates a new 4 GiB regular source image and private firmware variables in
+the existing receipt directory. It attaches that source and the diagnostic ISO,
+but no HOME disk. Source installation/recovery is complete only when the kernel
+root receipt and the real auth-supervisor receipt both occur in this attempt's
+unique UART log. The old plaintext-init desktop banner is intentionally absent
+from the merged auth stack. A 600-second hard bound and 120-second no-progress
+bound distinguish a large active install from a stalled one. Resume refuses an
+open source. Successful completion captures the source gate, stops its owned
+QEMU process, fsyncs the raw image, and hashes it. The source screenshot is the
+expected no-HOME error surface, not an unlock or desktop-qualification receipt.
+Use the offline installer on the stopped source before running the disk-only
+controller. Source provisioning with an ISO is not the no-ISO boot proof.
