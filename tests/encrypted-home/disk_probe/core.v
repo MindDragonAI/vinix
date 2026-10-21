@@ -5,6 +5,7 @@ module disk_probe
 #include <fcntl.h>
 #include <errno.h>
 #include <string.h>
+#include <stdio.h>
 #include <sys/resource.h>
 
 fn C.open(&char, i32, ...voidptr) i32
@@ -18,6 +19,7 @@ fn C.strcmp(&char, &char) i32
 fn C.strlen(&char) usize
 fn C.setrlimit(i32, &C.rlimit) i32
 fn C.__errno_location() &i32
+fn C.rename(&char, &char) i32
 
 struct C.rlimit {
 	rlim_cur u64
@@ -113,7 +115,8 @@ pub fn entry(argc i32, argv &&char) i32 {
 	if C.setrlimit(C.RLIMIT_CORE, &limit) != 0 { return 1 }
 	if C.getuid() != 0 || C.geteuid() != 0 || argc != 3 { return 1 }
 	unsafe {
-		writing := C.strcmp(argv[1], c'--write') == 0
+		renewing := C.strcmp(argv[1], c'--renew') == 0
+		writing := renewing || C.strcmp(argv[1], c'--write') == 0
 		if !writing && C.strcmp(argv[1], c'--read') != 0 { return 1 }
 		mut expected := [129]u8{}
 		mut size := 0
@@ -127,6 +130,9 @@ pub fn entry(argc i32, argv &&char) i32 {
 		expected[size] = `\n`
 		size++
 		if !home_mounted() { return 1 }
+		// Preserve the old file before creating/fsyncing a distinct inode under
+		// the other unlock method. Both paths remain on encrypted HOME.
+		if renewing && C.rename(c'/root/M14A-MARKER.TXT', c'/root/M14A-FIRST.TXT') != 0 { return 1 }
 		if writing {
 			fd := C.open(c'/root/M14A-MARKER.TXT', C.O_WRONLY | C.O_NOFOLLOW
 				| C.O_CLOEXEC | C.O_CREAT | C.O_EXCL, u32(0o600))
