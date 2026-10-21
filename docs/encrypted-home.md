@@ -126,6 +126,18 @@ requires the repository-compatible V library API.
 
 ## Guest qualification handoff
 
+An explicit graphical qualification build may add `-d home_test_bridge`.
+Only that build observes real UI/activation events through `/dev/com2` to a
+private, unrecorded host Unix UART socket. Frames start with `M14A-HM1`, then
+little-endian u32 operation and payload length. The prefix allows firmware
+UART traffic to be discarded without recording it. Operation 2 carries the
+fresh enrollment phrase; 10 is locked input ready, 11 is a real denial, 12
+follows successful activation and desktop fork, and 13 is entropy failure.
+Never persist this UART stream or take an enrollment screenshot. The fixture
+does not inject a credential, bypass authentication, or prove desktop exec
+success merely because operation 12 arrived. Production staging does not
+enable this define.
+
 The existing volume staging path builds and installs the production gate for
 both architectures. For a separate disposable probe binary, generate the same
 module with `-d vinix_home_gate -d home_guest_probe`, then compile its generated
@@ -166,6 +178,7 @@ tests/storage-volumes/volume_test.v
 tools/volumes/volumecli/core.v
 tools/volumes/volumecli/HOME-WORDLIST-LICENSE
 tools/volumes/volumecli/home_boot.v
+tools/volumes/volumecli/home_bridge.v
 tools/volumes/volumecli/home_crypto.v
 tools/volumes/volumecli/home_policy.v
 tools/volumes/volumecli/home_probe.v
