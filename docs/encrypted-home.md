@@ -126,6 +126,17 @@ requires the repository-compatible V library API.
 
 ## Guest qualification handoff
 
+Current qualification is blocked: the disposable guest reaches enrollment but
+reports encrypted-home activation failure and stays locked. No cold-boot
+readback or offline encryption-at-rest PASS is claimed. Do not deploy this
+branch as a production desktop replacement.
+
+For secret-safe diagnostics, `-d home_mask_enrollment_words` draws plus signs
+instead of words on the enrollment screen. This is a separate fixture, not
+the production backup experience. It changes no authentication or encryption
+decision. Only a controller built for that matching fixture may save an
+enrollment screenshot; never capture the normal production phrase display.
+
 An explicit graphical qualification build may add `-d home_test_bridge`.
 Only that build observes real UI/activation events through `/dev/com2` to a
 private, unrecorded host Unix UART socket. Frames start with `M14A-HM1`, then

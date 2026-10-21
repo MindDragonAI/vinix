@@ -145,7 +145,10 @@ fn home_ui(fd i32) i32 {
 	if reply.op == 2 {
 		if !home_send(fd, 2, unsafe { nil }, 0) || !home_receive(fd, mut reply) || reply.op != 2 { return 1 }
 		screen.clear(); screen.label('SAVE YOUR TWELVE WORDS OFFLINE', 0)
-		screen.text(&reply.bytes[0], reply.size, 2, false)
+		$if home_mask_enrollment_words ? {
+			// Secret-safe diagnostic fixture only; production displays the words.
+			screen.text(&reply.bytes[0], reply.size, 2, true)
+		} $else { screen.text(&reply.bytes[0], reply.size, 2, false) }
 		screen.label('THESE WORDS UNLOCK YOUR ENCRYPTED DATA.', 5)
 		screen.label('IF THIS IS YOUR ONLY METHOD AND YOU LOSE IT', 6)
 		screen.label('YOUR DATA CANNOT BE RECOVERED.', 7)
