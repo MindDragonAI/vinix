@@ -35,7 +35,7 @@ fn home_probe_round(mut state HomeSupervisor, phase int) bool {
 	if child == 0 {
 		C.close(pair[0])
 		ok := home_probe_client(pair[1], phase, &state.phrase[0], state.phrase_size)
-		C.close(pair[1]); erase_key(&state, sizeof(state)); C._exit(if ok { 0 } else { 1 })
+		C.close(pair[1]); home_erase_state(mut state); C._exit(if ok { 0 } else { 1 })
 	}
 	C.close(pair[1]); if child < 0 { C.close(pair[0]); return false }
 	passed := home_serve(pair[0], mut state)

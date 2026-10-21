@@ -50,6 +50,12 @@ mut:
 	fresh bool
 }
 
+// A mutable struct parameter is emitted as a C pointer. sizeof(state) would
+// erase only that pointer's width, not the key-bearing supervisor object.
+fn home_erase_state(mut state HomeSupervisor) {
+	erase_key(&state, sizeof(HomeSupervisor))
+}
+
 fn home_entropy(output &u8, size int) bool {
 	$if home_entropy_failure ? { return false }
 	return key_random_bytes(output, size)

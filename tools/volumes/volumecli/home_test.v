@@ -9,6 +9,14 @@ fn home_test_rng(output &u8, size int) bool {
 }
 fn home_test_no_entropy(_ &u8, _ int) bool { return false }
 
+fn test_home_child_erases_the_entire_supervisor_not_its_pointer_size() {
+	mut state := HomeSupervisor{}
+	mut zero := HomeSupervisor{}
+	unsafe { C.memset(&state, 0xa5, sizeof(HomeSupervisor)); C.memset(&zero, 0, sizeof(HomeSupervisor)) }
+	home_erase_state(mut state)
+	assert unsafe { C.memcmp(&state, &zero, sizeof(HomeSupervisor)) == 0 }
+}
+
 fn test_home_compile_time_entropy_failure() {
 	$if home_entropy_failure ? {
 		mut state := HomeSupervisor{fresh: true, bytes: 128 * 1024 * 1024, sector: 512}

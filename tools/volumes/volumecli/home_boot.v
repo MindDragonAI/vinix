@@ -98,7 +98,7 @@ fn home_spawn_ui(mut state HomeSupervisor) i32 {
 	child := C.fork()
 	if child == 0 {
 		// Never leave the supervisor's data key in the replacement UI image.
-		erase_key(&state, sizeof(state)); C.close(pair[0])
+		home_erase_state(mut state); C.close(pair[0])
 		mut descriptor := [24]char{}
 		C.snprintf(&descriptor[0], 24, c'%d', pair[1])
 		args := [&char(c'/usr/libexec/vinix-home-gate'), &char(c'--ui'), unsafe { &descriptor[0] }, unsafe { &char(nil) }]!
@@ -118,7 +118,7 @@ fn home_session(mut state HomeSupervisor) i32 {
 	if C.setenv(c'HOME', c'/root', 1) != 0 || C.chdir(c'/root') != 0 { return 1 }
 	child := C.fork()
 	if child == 0 {
-		erase_key(&state, sizeof(state))
+		home_erase_state(mut state)
 		args := [&char(c'/usr/bin/vinix-desktop'), unsafe { &char(nil) }]!
 		home_session_note(c'HOME-SESSION: before desktop exec\n', 0)
 		C.execv(args[0], unsafe { &&char(&args[0]) })
