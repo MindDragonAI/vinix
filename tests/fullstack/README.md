@@ -20,7 +20,8 @@ requirement: the bridge protocol does not attest the fixture's build flags.
 The controller copies the matching `/usr/share/edk2/x64/OVMF_CODE.4m.fd` and
 `OVMF_VARS.4m.fd` into the private run directory once, preserving VARS through
 three separate QEMU processes. It attaches system/home at ide.0/ide.1 with no
-default devices or optical drive. Boot 1 enrolls and writes/fsyncs the marker;
+default devices or optical drive, and gives the system disk `bootindex=1`.
+Boot 1 enrolls and writes/fsyncs the marker;
 boot 2 denies three wrong phrases and a wrong password, switches back to phrase
 mode, and reads the existing marker; boot 3 unlocks by phrase and reads it again.
 No later boot writes or renews the marker. The existing probe verifies exact
@@ -36,6 +37,10 @@ are erased on exit. Every successful stop requires QEMU dead, successful exit,
 and fsync of both images and private VARS. A failed check exits nonzero;
 deferred cleanup stops only the controller-owned QEMU process. Offline image
 scanning and screenshot review remain with the parent.
+Startup and enrollment-timeout frames are also captured under the mandatory
+masked-fixture contract. The terminal image-ID command adds its own delimiter
+newline because sysdisk's committed ID is not newline-terminated. Keep every
+failed run directory; a fresh retry must not erase or relabel the old attempt.
 
 Transport selftests use only synthetic data and local socket pairs:
 

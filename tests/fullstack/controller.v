@@ -465,9 +465,9 @@ fn (mut b Boot) launch(root string, n int, boot_disk string, disk string, qemu s
 		'if=pflash,format=raw,unit=0,readonly=on,file=' + code, '-drive',
 		'if=pflash,format=raw,unit=1,file=' + vars, '-drive',
 		'if=none,id=system,format=raw,cache=writeback,file=' + boot_disk.replace(',', ',,'), '-device',
-		'ide-hd,drive=system,bus=ide.0', '-drive',
+		'ide-hd,drive=system,bus=ide.0,bootindex=1', '-drive',
 		'if=none,id=home,format=raw,cache=writeback,file=' + disk.replace(',', ',,'), '-device',
-		'ide-hd,drive=home,bus=ide.1', '-boot', 'order=c', '-nic', 'none', '-display', 'none',
+		'ide-hd,drive=home,bus=ide.1', '-nic', 'none', '-display', 'none',
 		'-monitor', 'none', '-serial', 'file:' + b.serial_log, '-serial',
 		'unix:' + secret_path + ',server=on,wait=off', '-qmp',
 		'unix:' + qmp_path + ',server=on,wait=off', '-no-reboot', '-S']
@@ -616,7 +616,9 @@ fn marker_probe(mut b Boot, mut report Report, create bool) !string {
 	} else {
 		"/usr/libexec/vinix-home-qualify --read '" + marker + "'\n"
 	}
-	type_public(mut b.qmp, command + 'echo M15-IMAGE-ID-BEGIN > /dev/com1\ncat /.vinix-image-id > /dev/com1\necho M15-IMAGE-ID-END > /dev/com1\n')!
+	// sysdisk's committed image ID has no trailing newline. Frame it explicitly
+	// instead of assuming the archive marker's newline survives installation.
+	type_public(mut b.qmp, command + 'echo M15-IMAGE-ID-BEGIN > /dev/com1\ncat /.vinix-image-id > /dev/com1\necho > /dev/com1\necho M15-IMAGE-ID-END > /dev/com1\n')!
 	report.pass('marker-command-submitted')!
 	report.stage = 'marker-await-serial-readback'
 	end := after(45)
@@ -718,9 +720,16 @@ fn qualify(mut report Report, root string, boot_disk string, kernel string, disk
 		report.stage = 'boot-' + n.str() + '-launch'
 		b.launch(root, n, boot_disk, disk, qemu)!
 		report.pass('boot-' + n.str() + '-kvm-and-required-blocks-no-optical')!
+		// This controller requires the masked-word fixture, so startup frames
+		// remain secret-safe even if the guest reaches enrollment immediately.
+		settle(3)!
+		screen(mut b, 'boot-startup')!
 		if n == 1 {
 			report.stage = 'enrollment-phrase-frame'
-			read_phrase(mut b.serial, mut secrets)!
+			read_phrase(mut b.serial, mut secrets) or {
+				screen(mut b, 'enrollment-frame-failure') or {}
+				return err
+			}
 			report.pass('enrollment-frame-received-in-locked-memory')!
 			// Mandatory masked-word fixture: never run against a production word UI.
 			screen(mut b, 'masked-word-enrollment-fixture')!
