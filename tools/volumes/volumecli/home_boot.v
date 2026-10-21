@@ -93,6 +93,7 @@ fn home_activate(fd i32, mut state HomeSupervisor) bool {
 }
 
 fn home_spawn_ui(mut state HomeSupervisor) i32 {
+	home_session_note(c'HOME-UI: budget failures=%d\n', i32(state.budget.failures))
 	mut pair := [2]i32{}
 	if C.socketpair(C.AF_UNIX, C.SOCK_STREAM, 0, &pair[0]) != 0 { return -1 }
 	child := C.fork()
@@ -111,6 +112,7 @@ fn home_spawn_ui(mut state HomeSupervisor) i32 {
 	C.close(pair[0]); if !passed { C.kill(child, C.SIGTERM) }
 	mut status := i32(0)
 	for C.waitpid(child, &status, 0) < 0 { if unsafe { C.errno != C.EINTR } { return -1 } }
+	home_session_note(c'HOME-UI: child wait status=%d\n', status)
 	return if passed && status == 0 { i32(1) } else { i32(0) }
 }
 

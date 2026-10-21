@@ -110,6 +110,12 @@ fn home_input(screen &HomeScreen, console i32, prompt string, output &u8, toggle
 		}
 		mut ch := u8(0)
 		if !home_transfer(console, &ch, 1, false) { return -1 }
+		$if home_ui_fault_controls ? {
+			// Disposable qualification image only. Production has no fault keys.
+			if toggle && ch == 24 { C._exit(126) }
+			if toggle && ch == 25 { C._exit(127) }
+			if toggle && ch == 26 { C.kill(C.getpid(), C.SIGKILL); C._exit(1) }
+		}
 		if ch == 13 || ch == 10 { return used }
 		if ch == 9 && toggle { erase_key(output, 128); return -2 }
 		if ch == 27 { erase_key(output, 128); used = 0 }
