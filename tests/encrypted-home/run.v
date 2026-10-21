@@ -33,6 +33,13 @@ fn main() {
 	os.mkdir(work) or { panic(err) }
 	defer { os.rmdir_all(work) or {} }
 	source := root + '/tools/volumes/volumecli'
+	guard_dir := work + '/desktop-guard'
+	os.mkdir(guard_dir) or { panic(err) }
+	guard_source := os.read_file(root + '/desktop/encrypted_home.v') or { panic(err) }
+	guard := function(guard_source, 'desktop_encrypted_home_ready') or { panic(err) }
+	os.write_file(guard_dir + '/main.v', 'module main\nimport os\nfn desktop_home_note(_ &char) {}\n' + guard + '\nfn main() { assert !desktop_encrypted_home_ready(); println("HOME-GUARD: absent mapper denied without double free PASS") }\n') or { panic(err) }
+	run(v, ['-nocache', '-new-compiler', '-gc', 'none', '-manualfree', '-cc', 'clang', '-o', work + '/guard-test', guard_dir]) or { eprintln(err); exit(1) }
+	run(work + '/guard-test', []) or { eprintln(err); exit(1) }
 	run(v, ['-nocache', '-enable-globals', '-cc', 'clang', '-cflags', '-O2 -I' + source,
 		'-d', 'volume_library', '-o', work + '/home-test', source + '/home_test.v']) or { eprintln(err); exit(1) }
 	run(work + '/home-test', []) or { eprintln(err); exit(1) }

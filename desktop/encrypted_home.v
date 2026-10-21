@@ -27,12 +27,14 @@ fn desktop_encrypted_home_ready() bool {
 	defer { unsafe { mounts.free() } }
 	mut mounted := false
 	lines := mounts.split_into_lines()
-	defer { unsafe { for line in lines { line.free() }; lines.free() } }
+	// []string.free() recursively frees its strings. Freeing copied elements
+	// first leaves dangling array entries and double-frees them at cleanup.
+	defer { unsafe { lines.free() } }
 	for line in lines {
 		fields := line.fields()
 		if fields.len >= 4 && fields[0] == '/dev/mapper/vinix63' && fields[1] == '/root'
 			&& fields[2] == 'ext2' && (fields[3] == 'rw' || fields[3].starts_with('rw,')) { mounted = true }
-		unsafe { for field in fields { field.free() }; fields.free() }
+		unsafe { fields.free() }
 	}
 	if !mounted {
 		desktop_home_note(c'HOME-DESKTOP: mount check failed; guard failed\n')
