@@ -175,7 +175,10 @@ fn home_ui(fd i32) i32 {
 	}
 	if reply.op != 1 {
 		screen.clear(); screen.label('ENCRYPTED HOME UNAVAILABLE', 2)
-		screen.label('CONFIGURATION OR STORAGE ERROR. REBOOT REQUIRED.', 4)
+		if reply.op == 6 {
+			screen.label('SECURE ENTROPY IS UNAVAILABLE.', 4)
+			screen.label('ENROLLMENT STOPPED. NO FALLBACK WAS USED.', 6)
+		} else { screen.label('CONFIGURATION OR STORAGE ERROR. REBOOT REQUIRED.', 4) }
 		mut ch := u8(0)
 		for home_transfer(console, &ch, 1, false) { ch = 0 }
 		return 1

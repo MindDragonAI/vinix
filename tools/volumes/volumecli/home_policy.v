@@ -4,7 +4,12 @@ module volumecli
 const home_data_offset = u64(1048576)
 const home_header_bytes = 4096
 
-enum HomePhase { locked enrollment mounting session failed }
+enum HomePhase { locked enrollment mounting session failed entropy_failed }
+
+fn home_status_op(phase HomePhase) u32 {
+	return if phase == .enrollment { u32(2) } else if phase == .locked { u32(1) }
+		else if phase == .entropy_failed { u32(6) } else { u32(0) }
+}
 
 struct HomeBudget {
 mut:

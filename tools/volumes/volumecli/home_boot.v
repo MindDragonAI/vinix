@@ -176,7 +176,8 @@ fn home_boot() i32 {
 		state.fresh = true
 		if !home_prepare(mut state, home_entropy) {
 			home_test_event(13, unsafe { nil }, 0)
-			return plan_error(c'secure entropy unavailable; enrollment stopped')
+			plan_error(c'secure entropy unavailable; enrollment stopped')
+			return 2
 		}
 	}
 	for {
@@ -206,7 +207,7 @@ pub fn home_run(argc i32, argv &&char) i32 {
 	// A configuration, metadata, entropy or activation failure presents a
 	// static error surface, with no path back to enrollment or a shell.
 	mut failed := unsafe { &HomeSupervisor(C.alloca(sizeof(HomeSupervisor))) }
-	unsafe { *failed = HomeSupervisor{phase: .failed} }
+	unsafe { *failed = HomeSupervisor{phase: if result == 2 { .entropy_failed } else { .failed }} }
 	home_spawn_ui(mut failed)
 	return result
 }

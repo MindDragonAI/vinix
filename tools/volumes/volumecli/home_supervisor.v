@@ -165,7 +165,7 @@ fn home_serve(fd i32, mut state HomeSupervisor) bool {
 	for home_receive(fd, mut frame) {
 		mut answer := u32(0)
 		if frame.op == 1 && frame.size == 0 {
-			answer = if state.phase == .enrollment { u32(2) } else if state.phase == .locked { u32(1) } else { u32(0) }
+			answer = home_status_op(state.phase)
 		} else if frame.op == 2 && frame.size == 0 && state.phase == .enrollment {
 			if !home_send(fd, 2, &state.phrase[0], state.phrase_size) { return false }
 			continue

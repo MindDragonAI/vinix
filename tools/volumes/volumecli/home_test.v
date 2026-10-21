@@ -9,6 +9,15 @@ fn home_test_rng(output &u8, size int) bool {
 }
 fn home_test_no_entropy(_ &u8, _ int) bool { return false }
 
+fn test_home_status_never_turns_an_entropy_failure_into_enrollment_or_unlock() {
+	assert home_status_op(.entropy_failed) == 6
+	assert home_status_op(.failed) == 0
+	assert home_status_op(.mounting) == 0
+	assert home_status_op(.session) == 0
+	assert home_status_op(.locked) == 1
+	assert home_status_op(.enrollment) == 2
+}
+
 fn test_home_child_erases_the_entire_supervisor_not_its_pointer_size() {
 	mut state := HomeSupervisor{}
 	mut zero := HomeSupervisor{}
