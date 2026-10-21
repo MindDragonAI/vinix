@@ -522,7 +522,11 @@ fn new_mount(parent &VFSNode, source string, target string, fstype string, flags
 		}
 		source_node = reduce_node(source_node, true)
 		if source_node == unsafe { nil } { return none }
-		if volume_mount_node(source_node) { errno.set(errno.ebusy); return none }
+		if volume_mount_node(source_node) {
+			// Pin the physical extent while its canonical name is still locked.
+			// Removal takes a conflicting reservation before it can unlink it.
+			block_token = begin_volume_filesystem_mount(source_node, kind)?
+		}
 		if stat.isdir(source_node.resource.stat.mode) {
 			errno.set(errno.enotblk)
 			return none
@@ -598,9 +602,11 @@ fn new_mount(parent &VFSNode, source string, target string, fstype string, flags
 		// metadata or allocates an instance. EXT2 clones this exact device.
 		mut template := if kind in ['ext2', 'ext4'] { block_filesystem(kind, source_node) } else { unsafe { filesystems[kind] } }
 		if kind in ['ext2', 'ext4'] {
-			block_token = begin_block_device_mount(source_node) or {
-				unsafe { basename.free() }
-				return none
+			if block_token < 0 {
+				block_token = begin_block_device_mount(source_node) or {
+					unsafe { basename.free() }
+					return none
+				}
 			}
 			if template == unsafe { nil } {
 				template = probe_block_filesystem(kind, source_node) or {

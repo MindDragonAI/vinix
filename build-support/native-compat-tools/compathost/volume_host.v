@@ -10,7 +10,7 @@ fn volume_host(args []string) !int {
 	keep := os.getenv('VINIX_VOLUME_HOST_DIR')
 	work := hosttest.work_dir(keep, 'vinix-volume-host-')!
 	defer { if keep == '' { retire(work) } }
-	for source in ['kernel/fs/storage_control.v', 'kernel/fs/storage_health.v', 'kernel/fs/storage_crypt.v', 'kernel/aesxts/core.v',
+	for source in ['kernel/fs/storage_control.v', 'kernel/fs/storage_health.v', 'kernel/fs/storage_crypt.v', 'kernel/fs/storage_format.v', 'kernel/fs/storage_mount.v', 'kernel/aesxts/core.v',
 		'kernel/resource/block_health.v', 'kernel/resource/block_health_arm64.v',
 		'kernel/resource/block_health_amd64.v', 'kernel/resource/block_status.v',
 		'kernel/resource/block_discard.v', 'kernel/resource/block_identity.v',
@@ -26,6 +26,11 @@ fn volume_host(args []string) !int {
 		os.cp(path, target)!
 	}
 	write(work + '/v.mod', "Module { name: 'volume_host' }\n")!
+	policy := read(root() + '/kernel/fs/block_policy.v')!
+	begin := policy.index('fn begin_block_device_mount(') or { return error('Mount reservation helper missing') }
+	end := policy.index('\nfn begin_filesystem_block_mount(') or { return error('Mount reservation boundary missing') }
+	if end <= begin { return error('Mount reservation boundaries invalid') }
+	write(work + '/fs/block_mount_reservation.v', 'module fs\nimport resource\nimport security\n' + policy[begin..end])!
 	os.cp(root() + '/tests/storage-volumes/volume_test.v', work + '/fs/volume_test.v')!
 	os.cp(root() + '/tests/storage-volumes/aesxts_test.v', work + '/aesxts/core_test.v')!
 	os.cp(root() + '/tests/storage-volumes/aesxts_vectors.rsp', work + '/aesxts/aesxts_vectors.rsp')!

@@ -119,6 +119,13 @@ fn desktop_publish_session_ready() {
 }
 
 fn main() {
+	desktop_home_note(c'HOME-DESKTOP: main entry\n')
+	// This check precedes every app/service/greeter dispatch, independent of
+	// HOME, VINIX_SYSTEM_SESSION or a command-line mode supplied by a caller.
+	// Vinix's desktop build uses the Linux userspace ABI target.
+	$if linux || vinix {
+		if !desktop_encrypted_home_ready() { eprintln('vinix-desktop: encrypted home is locked'); exit(1) }
+	}
 	gpu_present_startup_stage(c'entered main')
 	gpu_present_startup_stage(c'collecting process arguments')
 	all_args := arguments()

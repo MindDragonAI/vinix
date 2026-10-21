@@ -759,5 +759,8 @@ pub fn run(argc i32, argv &&char) i32 {
 
 $if !volume_library ? {
 	@[export: 'main']
-	pub fn entry(argc i32, argv &&char) i32 { return run(argc, argv) }
+	pub fn entry(argc i32, argv &&char) i32 {
+		$if vinix_home_gate ? { return home_run(argc, argv) }
+		$else { return run(argc, argv) }
+	}
 }

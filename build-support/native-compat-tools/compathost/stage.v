@@ -87,9 +87,10 @@ fn stage_command(args []string, security bool) !int {
 		'vinix-volume-tool-'
 	})!
 	defer { retire(work) }
-	tools := if security { ['sandbox', 'mac', 'audit'] } else { ['volume'] }
+	tools := if security { ['sandbox', 'mac', 'audit'] } else { ['volume', 'home-gate'] }
 	for tool in tools {
 		module_path, headers, destination := match tool {
+			'home-gate' { root() + '/tools/volumes/volumecli', root() + '/tools/volumes/volumecli', '/usr/libexec/vinix-home-gate' }
 			'sandbox' { '', root() + '/tools/sandbox', '/usr/bin/vinix-sandbox' }
 			'mac' { '', root() + '/tools/security-mac', '/usr/sbin/vinix-mac' }
 			'audit' { '', root() + '/tools/security-audit', '/usr/sbin/vinix-security-audit' }
@@ -101,7 +102,7 @@ fn stage_command(args []string, security bool) !int {
 		if security {
 			security_core(tool, source, if arch == 'aarch64' { 'arm64' } else { 'amd64' }, []string{})!
 		} else {
-			generate(module_path, source, if arch == 'aarch64' { 'arm64' } else { 'amd64' }, []string{}, '')!
+			generate(module_path, source, if arch == 'aarch64' { 'arm64' } else { 'amd64' }, if tool == 'home-gate' { ['vinix_home_gate'] } else { []string{} }, '')!
 			write(source, read(source)! + '\n_Static_assert(sizeof(volumecli__Request)==32, "V request ABI");\n_Static_assert(sizeof(volumecli__Status)==128, "V status ABI");\n_Static_assert(sizeof(volumecli__Health)==1088, "V health ABI");\n_Static_assert(offsetof(volumecli__Health,data)==576, "V health data ABI");\n')!
 		}
 		binary := work + '/' + os.file_name(destination)
@@ -109,6 +110,7 @@ fn stage_command(args []string, security bool) !int {
 		if !security {
 			flags << ['-Wno-unused-function', '-Wno-unused-parameter', '-Wno-unused-label']
 		}
+		if tool == 'home-gate' { flags << '-Wno-unused-const-variable' }
 		run([...flags, '-D_GNU_SOURCE', '-DVINIX_V_RUNTIME', '-I', headers, source, '-o', binary])!
 		elf_arch(binary, arch)!
 		install(binary, staging + destination, 0o755, if security {
