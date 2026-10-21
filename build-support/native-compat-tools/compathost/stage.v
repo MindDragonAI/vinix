@@ -109,8 +109,10 @@ fn stage_command(args []string, security bool) !int {
 		mut flags := [...cc, '-static', '-std=c11', '-O2', '-Wall', '-Wextra', '-Werror']
 		if !security {
 			flags << ['-Wno-unused-function', '-Wno-unused-parameter', '-Wno-unused-label']
+			// Both volume entry points translate the home module. Production
+			// builds omit diagnostics, leaving V's static diagnostic literals unused.
+			flags << '-Wno-unused-const-variable'
 		}
-		if tool == 'home-gate' { flags << '-Wno-unused-const-variable' }
 		run([...flags, '-D_GNU_SOURCE', '-DVINIX_V_RUNTIME', '-I', headers, source, '-o', binary])!
 		elf_arch(binary, arch)!
 		install(binary, staging + destination, 0o755, if security {
