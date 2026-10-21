@@ -55,34 +55,37 @@ fn home_publish(fd i32, header &[4096]u8) bool {
 }
 
 fn home_activate(fd i32, mut state HomeSupervisor) bool {
-	if state.phase != .mounting { return false }
+	if state.phase != .mounting { return home_activation_failed('phase') }
 	mut request := unsafe { &EncryptedRequest(C.alloca(sizeof(EncryptedRequest))) }
 	unsafe { *request = EncryptedRequest{data: Request{slot: 63, offset: home_data_offset, length: state.bytes - home_data_offset}}
 		C.memcpy(&request.key[0], &state.key[0], 64) }
 	defer { erase_key(request, sizeof(EncryptedRequest)) }
-	if C.ioctl(fd, u64(0x56560006), request) != 0 { return false }
+	if C.ioctl(fd, u64(0x56560006), request) != 0 { return home_activation_failed('import') }
 	mapper := C.open(c'/dev/mapper/vinix63', C.O_RDWR | C.O_CLOEXEC | C.O_NOFOLLOW)
-	if mapper < 0 { return false }
+	if mapper < 0 { return home_activation_failed('mapper-open') }
 	defer { C.close(mapper) }
-	if state.fresh && C.ioctl(mapper, u64(0x56560007), unsafe { nil }) != 0 { return false }
+	if state.fresh && C.ioctl(mapper, u64(0x56560007), unsafe { nil }) != 0 { return home_activation_failed('format') }
 	// Raw writes to a whole disk are forbidden after any overlapping mount.
 	// Publish only after formatting/barriers, but before that first mount.
 	// A power loss here leaves either an empty provisioned home or a rejected
 	// incomplete enrollment, never pre-existing user data without a key slot.
-	if state.fresh && (C.fsync(mapper) != 0 || !home_publish(fd, &state.header)) { return false }
+	if state.fresh && C.fsync(mapper) != 0 { return home_activation_failed('mapper-sync') }
+	if state.fresh && !home_publish(fd, &state.header) { return home_activation_failed('publish') }
 	// /root must be covered before creating any profile or launching a session.
-	if C.chdir(c'/') != 0 || !home_mount() { return false }
+	if C.chdir(c'/') != 0 { return home_activation_failed('chdir') }
+	if !home_mount() { return home_activation_failed('mount') }
 	// Also completes a boot interrupted after header publication but before
 	// the first profile marker was committed inside the encrypted volume.
 	existing := C.open(c'/root/.vinix-encrypted-home', C.O_RDONLY | C.O_CLOEXEC | C.O_NOFOLLOW)
 	if existing >= 0 { C.close(existing) }
 	else {
-		if unsafe { C.errno != C.ENOENT } { return false }
+		if unsafe { C.errno != C.ENOENT } { return home_activation_failed('marker-lookup') }
 		marker := C.open(c'/root/.vinix-encrypted-home', C.O_WRONLY | C.O_CREAT | C.O_EXCL | C.O_CLOEXEC | C.O_NOFOLLOW, u32(0o600))
-		if marker < 0 { return false }
+		if marker < 0 { return home_activation_failed('marker-open') }
 		ok := home_transfer(marker, unsafe { &u8(c'Vinix encrypted home v1\n') }, 24, true) && C.fsync(marker) == 0
 		C.close(marker)
-		if !ok || C.fsync(mapper) != 0 { return false }
+		if !ok { return home_activation_failed('marker-write-sync') }
+		if C.fsync(mapper) != 0 { return home_activation_failed('marker-mapper-sync') }
 	}
 	state.phase = .session
 	erase_key(&state.phrase[0], 128); erase_key(&state.random[0], 56)

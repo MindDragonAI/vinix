@@ -1,6 +1,21 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 module volumecli
 
+fn home_activation_failed(stage string) bool {
+	$if home_test_bridge ? {
+		saved := unsafe { C.errno }
+		fd := C.open(c'/dev/com1', C.O_WRONLY | C.O_CLOEXEC | C.O_NOFOLLOW)
+		if fd >= 0 {
+			mut message := [160]char{}
+			n := C.snprintf(&message[0], 160, c'HOME-ACTIVATION: %s errno=%d\n', unsafe { &stage[0] }, saved)
+			if n > 0 && n < 160 { C.write(fd, &message[0], usize(n)) }
+			C.close(fd)
+		}
+		unsafe { C.errno = saved }
+	}
+	return false
+}
+
 // Explicit qualification builds only. COM2 is a private, unrecorded Unix UART
 // socket owned by the disposable test controller. Production staging never
 // enables this define. No credential is written to a file, log or argument.
