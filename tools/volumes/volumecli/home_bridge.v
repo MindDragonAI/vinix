@@ -1,6 +1,21 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 module volumecli
 
+// Only fixed C-string formats and nonsecret syscall results belong here.
+fn home_session_note(format &char, value i32) {
+	$if home_test_bridge ? {
+		saved := unsafe { C.errno }
+		fd := C.open(c'/dev/com1', C.O_WRONLY | C.O_CLOEXEC | C.O_NOFOLLOW)
+		if fd >= 0 {
+			mut message := [160]char{}
+			n := C.snprintf(&message[0], 160, format, value)
+			if n > 0 && n < 160 { C.write(fd, &message[0], usize(n)) }
+			C.close(fd)
+		}
+		unsafe { C.errno = saved }
+	}
+}
+
 fn home_activation_failed(stage string) bool {
 	$if home_test_bridge ? {
 		saved := unsafe { C.errno }

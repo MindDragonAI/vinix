@@ -120,12 +120,21 @@ fn home_session(mut state HomeSupervisor) i32 {
 	if child == 0 {
 		erase_key(&state, sizeof(state))
 		args := [&char(c'/usr/bin/vinix-desktop'), unsafe { &char(nil) }]!
-		C.execv(args[0], unsafe { &&char(&args[0]) }); C._exit(127)
+		home_session_note(c'HOME-SESSION: before desktop exec\n', 0)
+		C.execv(args[0], unsafe { &&char(&args[0]) })
+		home_session_note(c'HOME-SESSION: desktop exec failed errno=%d\n', unsafe { C.errno })
+		C._exit(127)
 	}
 	if child < 0 { return 1 }
 	if !home_test_event(12, unsafe { nil }, 0) { C.kill(child, C.SIGTERM); return 1 }
 	mut status := i32(0)
-	for C.waitpid(child, &status, 0) < 0 { if unsafe { C.errno != C.EINTR } { return 1 } }
+	for C.waitpid(child, &status, 0) < 0 {
+		if unsafe { C.errno != C.EINTR } {
+			home_session_note(c'HOME-SESSION: wait failed errno=%d\n', unsafe { C.errno })
+			return 1
+		}
+	}
+	home_session_note(c'HOME-SESSION: child wait status=%d\n', status)
 	// Session termination requires a cold boot. Do not paint a misleading
 	// relock over live mappings/processes or enter any recovery shell.
 	return 1
