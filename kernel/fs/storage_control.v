@@ -21,6 +21,8 @@ const volume_create = u64(0x56560001)
 const volume_resize = u64(0x56560002)
 const volume_remove = u64(0x56560003)
 const volume_create_encrypted = u64(0x56560006)
+const volume_format_encrypted = u64(0x56560007)
+const volume_prepare_encrypted = u64(0x56560008)
 const volume_limit = 64
 
 struct VolumeRequest {
@@ -302,6 +304,8 @@ fn (mut volume LogicalVolume) unref(_ voidptr) ? {
 
 fn storage_request(request u64) bool {
 	return request == volume_create || request == volume_resize || request == volume_remove
+		|| request == volume_format_encrypted
+		|| request == volume_prepare_encrypted
 		|| request == volume_create_encrypted
 		|| request == resource.block_status_ioctl || request == 0x80081272 || request == 0x1260
 		|| request == 0x1268 || request == 0x125e
@@ -316,6 +320,14 @@ fn storage_admin() bool {
 }
 
 fn storage_ioctl(mut descriptor file.FD, request u64, argument voidptr) ?int {
+	if request == volume_prepare_encrypted {
+		if !storage_admin() { errno.set(errno.eperm); return none }
+		// Enrollment and typed unlock credentials are sensitive before any
+		// mapper exists. Prohibit a plaintext hibernation image from now on.
+		katomic.store(mut &encrypted_block_used, 1)
+		return 0
+	}
+	if request == volume_format_encrypted { return format_encrypted_home(mut descriptor) }
 	if request == resource.block_health_ioctl { return storage_health(mut descriptor, argument) }
 	if request == resource.block_discard_ioctl { return storage_discard(mut descriptor, argument) }
 	if request != volume_create && request != volume_resize && request != volume_remove && request != volume_create_encrypted {

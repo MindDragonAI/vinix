@@ -141,46 +141,17 @@ fn prepare_environment() {
 @[export: 'vinix_init_desktop']
 pub fn desktop_start() {
  unsafe {
-  desktop := [&char(c'/usr/bin/vinix-desktop'),&char(nil)]!
-  gpu := [&char(c'/usr/bin/vinix-desktop-gpu'),&char(nil)]!
-  hyprland := [&char(c'/usr/bin/start-hyprland-vinix'),&char(nil)]!
-  shell := [&char(c'/bin/zsh'),&char(c'-l'),&char(nil)]!
-  mut status := i32(0)
-  prepare_environment(); prepare_desktop_boot(); prepare_hosted_x11_storage(); install_power_signals()
-  restore_boot_volumes()
-  if requested_power != 0 { apply_power_request() }
-  start_helper(c'/usr/libexec/vinix-security-audit-supervise',true)
-  start_helper(c'/usr/bin/vinix-files-sync',false)
-  start_helper(c'/usr/libexec/vinix-version-check',false)
-  if C.vinit_wifi_enabled() != 0 {
-   wifi := [&char(c'/usr/bin/wifi-ctl'),&char(c'load'),&char(c'/usr/share/vinix/wifi'),&char(nil)]!
-   init_print(c'\nVinix: loading the selected Wi-Fi firmware\n')
-   child := spawn_program(&wifi[0],&&char(nil),false,&status,&vinit_environment[0],false)
-   if requested_power != 0 { apply_power_request() }
-   if child < 0 || status != 0 { init_print(c'init: Wi-Fi firmware load failed; continuing without wireless\n') }
-  }
-  if executable_available(c'/etc/vinix/boot-hyprland') && executable_available(hyprland[0]) {
-   init_print(c'\nVinix: starting Hyprland\n'); spawn_program(&hyprland[0],&&char(nil),true,&status,&vinit_environment[0],false)
-   if requested_power != 0 { apply_power_request() }; init_print(c'init: Hyprland exited; starting the native recovery desktop\n')
-  }
-  for {
-   mut selected := &desktop[0]; mut fallback := &&char(nil)
-   if requested_power != 0 { apply_power_request() }
-   if gpu_available() && !executable_available(c'/run/vinix-desktop-development') { selected = &gpu[0]; fallback = &desktop[0]; init_print(c'\nVinix: starting the GPU-enabled desktop\n') }
-   else { init_print(c'\nVinix: starting the desktop\n') }
-   status = 0
-   mut child := spawn_program(selected,fallback,true,&status,&vinit_environment[0],voidptr(selected) == voidptr(&gpu[0]))
-   if requested_power != 0 { apply_power_request() }
-   if requested_reload != 0 { requested_reload = 0; init_print(c'init: desktop reload requested; starting the new binary\n'); stop_desktop_group(child); requested_reload = 0; continue }
-   if child < 0 || status == 127 << 8 {
-    init_print(c'init: could not start vinix-desktop; opening a recovery shell\n'); status = 0
-    child = spawn_program(&shell[0],&&char(nil),false,&status,&vinit_environment[0],false)
-    if requested_power != 0 { apply_power_request() }; if child < 0 { init_print(c'init: no recovery shell either; retrying the desktop\n') }; continue
-   }
-   report_desktop_exit(child,status); stop_desktop_group(child); pause_for(Delay{seconds:1})
-  }
+  // No desktop, helper or HOME-dependent preparation precedes the gate.
+  prepare_environment(); install_power_signals()
+  gate := [&char(c'/usr/libexec/vinix-home-gate'), &char(c'--boot'), &char(nil)]!
+  mut gate_status := i32(0)
+  gate_child := spawn_program(&gate[0], &&char(nil), true, &gate_status, &vinit_environment[0], false)
+  stop_desktop_group(gate_child)
+  init_print(c'init: encrypted home supervisor stopped; locked until reboot\n')
+  for { if requested_power != 0 { apply_power_request() }; pause_for(Delay{seconds:1}) }
  }
 }
+
 @[export: 'vinix_init_full']
 pub fn full_start() {
  unsafe {

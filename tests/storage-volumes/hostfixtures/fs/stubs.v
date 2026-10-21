@@ -4,6 +4,7 @@ import memory
 import resource
 import security
 import kbudget
+pub struct VFSNode { pub mut: resource &resource.Resource = unsafe { nil } }
 __global (nodes [64]&resource.Resource reject_publication bool)
 pub fn devtmpfs_add_volume(r &resource.Resource, _ string) ? { if reject_publication { return none }; for i in 0..64 { if nodes[i]==unsafe { nil } { nodes[i]=r; return } }; return none }
 fn security_register(mut r resource.Resource) { security.register_block_device(resource.block_identity(mut r)) }

@@ -317,6 +317,9 @@ fn desktop_use_user_home(home string) {
 // A valid profile is the registration marker. Keep enough information for a
 // later login screen to verify the password without ever storing it directly.
 fn desktop_load_user_name(home string) ?string {
+	// This is profile metadata inside an already decrypted filesystem, never
+	// a password verifier or source of encryption keys.
+	if home == '/root' && desktop_encrypted_home_ready() { return 'Owner'.clone() }
 	if home == '' {
 		return none
 	}

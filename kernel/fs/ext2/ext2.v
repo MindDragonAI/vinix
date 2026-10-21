@@ -1391,6 +1391,7 @@ pub fn ext2_init(backing_device &vfs.VFSNode) (&EXT2Filesystem, bool) {
 
 fn init() {
 	vfs.register_block_probe(probe_volume)
+	vfs.register_block_formatter(format)
 }
 
 fn probe_volume(kind string, backing_device &vfs.VFSNode) ?&vfs.FileSystem {

@@ -10,7 +10,7 @@ fn volume_host(args []string) !int {
 	keep := os.getenv('VINIX_VOLUME_HOST_DIR')
 	work := hosttest.work_dir(keep, 'vinix-volume-host-')!
 	defer { if keep == '' { retire(work) } }
-	for source in ['kernel/fs/storage_control.v', 'kernel/fs/storage_health.v', 'kernel/fs/storage_crypt.v', 'kernel/aesxts/core.v',
+	for source in ['kernel/fs/storage_control.v', 'kernel/fs/storage_health.v', 'kernel/fs/storage_crypt.v', 'kernel/fs/storage_format.v', 'kernel/aesxts/core.v',
 		'kernel/resource/block_health.v', 'kernel/resource/block_health_arm64.v',
 		'kernel/resource/block_health_amd64.v', 'kernel/resource/block_status.v',
 		'kernel/resource/block_discard.v', 'kernel/resource/block_identity.v',

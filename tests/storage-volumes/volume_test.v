@@ -119,6 +119,49 @@ fn encryption_key() [64]u8 {
 	mut key := [64]u8{}; for i in 0 .. 64 { key[i] = u8(i * 13 + 7) }; return key
 }
 
+__global home_format_calls int
+fn home_test_formatter(node &VFSNode, _ string) bool {
+	home_format_calls++
+	mut backend := node.resource
+	// The callback runs with the reservation held, and outside volume locks.
+	assert security.begin_block_mount(resource.block_identity(mut backend)) or { -1 } == -1
+	return true
+}
+
+fn test_home_formatter_only_explicit_writable_encrypted_unmounted_mapper() {
+	mut disk, mut descriptor := fixture(950)
+	register_block_formatter(home_test_formatter)
+	home_format_calls = 0
+	proc.admin = false
+	assert storage_ioctl(mut descriptor, volume_prepare_encrypted, unsafe { nil }) or { -1 } == -1
+	proc.admin = true
+	assert storage_ioctl(mut descriptor, volume_prepare_encrypted, unsafe { nil }) or { -1 } == 0
+	assert block_encryption_used()
+	assert storage_ioctl(mut descriptor, volume_format_encrypted, unsafe { nil }) or { -1 } == -1
+	assert create_logical_volume(mut descriptor, VolumeRequest{slot: 62, length: 4096}) or { -1 } == 0
+	mut plain := file.FD{handle: &file.Handle{resource: logical_volumes[62].box, flags: resource.o_rdwr}}
+	assert storage_ioctl(mut plain, volume_format_encrypted, unsafe { nil }) or { -1 } == -1
+	assert change_logical_volume(mut logical_volumes[62], volume_remove, VolumeRequest{}) or { -1 } == 0
+	key := encryption_key()
+	assert create_encrypted_volume(mut descriptor, VolumeRequest{slot: 62, length: 4096}, &key) or { -1 } == 0
+	mut encrypted := file.FD{handle: &file.Handle{resource: logical_volumes[62].box, flags: resource.o_rdwr}}
+	proc.admin = false
+	assert storage_ioctl(mut encrypted, volume_format_encrypted, unsafe { nil }) or { -1 } == -1
+	proc.admin = true; security.host_securelevel = 2
+	assert storage_ioctl(mut encrypted, volume_format_encrypted, unsafe { nil }) or { -1 } == -1
+	security.host_securelevel = 0; encrypted.handle.flags = resource.o_rdonly
+	assert storage_ioctl(mut encrypted, volume_format_encrypted, unsafe { nil }) or { -1 } == -1
+	encrypted.handle.flags = resource.o_rdwr
+	assert storage_ioctl(mut encrypted, volume_format_encrypted, unsafe { nil }) or { -1 } == 0
+	assert home_format_calls == 1
+	// A pending mount also excludes destructive formatting.
+	mount := security.begin_block_mount(logical_volumes[62].identity) or { panic('mount') }
+	assert storage_ioctl(mut encrypted, volume_format_encrypted, unsafe { nil }) or { -1 } == -1
+	security.finish_block_mount(mount, false)
+	assert change_logical_volume(mut logical_volumes[62], volume_remove, VolumeRequest{}) or { -1 } == 0
+	assert disk.refcount == 1 && home_format_calls == 1
+}
+
 fn test_encrypted_mapper_ciphertext_sectors_growth_errors_key_erasure_and_balanced_cycles() {
 	before := memory.live; budget := kbudget.host_budget_live
 	mut disk, mut descriptor := fixture(700); key := encryption_key()
