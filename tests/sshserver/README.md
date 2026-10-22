@@ -72,3 +72,45 @@ the 50 MiB upload closed remotely after 151.188 seconds despite the 900-second
 command limit. The bounded-memory repair passed target tests and reduced the
 observed growth; it did not fix that closure. Full guest hash/download and
 recursive qualification remain unverified. The Stage 2 operator gate is NO-GO.
+
+## Stage 3 follow-up — 2026-10-22
+
+The Stage 3 qualification gate is GO. The earlier Stage 2 failure remains a
+historical receipt, not the current verdict. A compositor IPC reply-header
+timeout (poll returned zero after 318 ms, with zero of four bytes received)
+closed the inherited control endpoint. The broker then stopped its services,
+including SSH. This was not a demonstrated SSH window or MAC rollover.
+
+Commit `ae6fa9ec` preserves only a not-yet-started control reply across a bounded
+timeout. It drains the outstanding reply before sending another request.
+Partial/malformed frames, EOF, actual I/O errors, public connections, startup
+and process ownership retain their fail-closed behavior. The timeout was not
+increased. Seven focused regression functions passed on fecv3.
+
+The fixed disposable guest passed a 50 MiB encrypted-HOME upload, guest SHA256,
+download and host SHA256; all matched
+`e35db3f4d24be1f8c653f7980519cf4ec475fc2edddab49b566bffd30276869e`.
+It also passed both recursive directions and guest/host checks for three files,
+including a nested empty file. A fresh authenticated session remained open
+for 210.302 seconds afterward and returned both marker lines. Callback,
+controller and QEMU cleanup all exited zero.
+
+Final transfer rates were 0.133 MB/s upload and 0.518 MB/s download. This closes
+the integrity/lifetime gate, not the earlier approximate 1 MB/s performance
+aspiration. Both production kernel architectures built successfully. The
+allocation comparator exactly retained the 175 baseline finding groups;
+`allowed.txt` was not changed and the absolute allowlist still fails.
+
+Build `debug-ssh/main.v` as
+`/home/agent/build/m16b3-receipts/debug-ssh` before running this callback.
+`scp -S` enables SSH `-vvv` without adding an unsupported remote SCP `-v` flag.
+The callback writes stdout and stderr to separate files, then retains its
+original stdout-first combined log contract. A regression covers an OpenSSH
+warning arriving before a checksum. The first fixed run had matching hashes
+but falsely stopped on this logging-order bug; that failed receipt is kept.
+The complete `gate-r2` run used the same unchanged ISO and guest binaries.
+
+Parent report: `~/.hermes/profiles/vinix-b/m16b3-ssh.report.md`.
+Remote receipts: `/home/agent/build/m16b3-receipts/` on fecv3.
+The image remains a masked/test-bridge qualification fixture, not a production
+deployment. No push, PR or PVE action was performed.

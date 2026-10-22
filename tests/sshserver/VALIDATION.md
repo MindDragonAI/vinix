@@ -53,3 +53,32 @@ and exited 137. Guest download/hash/recursive checks did not run.
 
 The callback failed, QEMU exited 0, and no forwarded test listener remained.
 Final mission gate: NO-GO. See the parent report and preserved raw receipts.
+
+## Stage 3 parent qualification — 2026-10-22
+
+GO for the requested SSH qualification. The Stage 1/2 NO-GO results above are
+retained as historical evidence. The first error was traced to the compositor's
+300 ms control-reply deadline, not an SSH channel arithmetic failure. Commit
+`ae6fa9ec` retains an idle outstanding reply without reconnecting, replaying a
+request, or accepting a partial frame. Seven focused regression functions,
+eight daemon test files, the final static daemon self-test, the opt-in parser
+and the unchanged TCP errno regression passed on fecv3. A separate static
+review found no concrete security or correctness blocker.
+
+Final `gate-r2` passed actual encrypted-HOME 50 MiB upload, guest hash, download,
+host hash, recursive copies and three guest/host tree comparisons. It then
+kept a fresh SSH session open for 210.302 seconds with before/after markers.
+Upload took 393.311 seconds (0.133 MB/s); download took 101.300 seconds
+(0.518 MB/s). Callback, controller and QEMU cleanup exited zero. The ISO and
+guest binaries were unchanged between the first fixed run and this rerun;
+only a stdout/stderr capture-order bug in the callback was corrected. The
+first fixed run's independently verified matching hashes are also retained.
+
+Both fresh production kernel builds exited zero. No kernel source changed
+in Stage 3. The allocation scan still fails its absolute allowlist with the
+same 175 baseline groups; the exact sorted NEW findings match, and
+`allowed.txt` is untouched. No clean-allocation or 1 MB/s upload claim is made.
+
+All owned QEMU processes and forwarded test listeners were gone at cleanup.
+Full report and checksummed receipts use the `m16b3-*` prefix in the active
+`vinix-b` profile. No push, PR, PVE change or deployment occurred.
