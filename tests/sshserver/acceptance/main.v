@@ -8,20 +8,16 @@ import crypto.sha256
 
 fn step(dir string, name string, args []string, expected int, input string) !string {
 	start := time.sys_mono_now()
-	mut p := os.new_process('/usr/bin/timeout')
-	defer { p.close() }
-	p.set_args(['-k', '3', '900', 'setsid', ...args])
-	p.set_redirect_stdio()
-	p.set_stdin_path(if input == '' { '/dev/null' } else { input })
-	p.run()
-	p.wait()
-	text := p.stdout_slurp() + p.stderr_slurp()
-	os.write_file(dir + '/' + name + '.log', text)!
-	os.write_file(dir + '/' + name + '.exit', p.code.str() + '\n')!
+	// Keep verbose OpenSSH output out of unread pipes while waiting.
+	command := ['timeout', '-k', '3', '900', ...args].map(os.quoted_path(it)).join(' ')
+	result := os.execute(command + ' < ' + os.quoted_path(if input == '' { '/dev/null' } else { input })
+		+ ' > ' + os.quoted_path(dir + '/' + name + '.log') + ' 2>&1')
+	text := os.read_file(dir + '/' + name + '.log')!
+	os.write_file(dir + '/' + name + '.exit', result.exit_code.str() + '\n')!
 	elapsed := time.sys_mono_now() - start
 	os.write_file(dir + '/' + name + '.elapsed_ns', elapsed.str() + '\n')!
-	println('M16B-GUEST ${name} exit=${p.code} expected=${expected} elapsed_ms=${elapsed/1000000}')
-	if p.code != expected { return error('${name} failed') }
+	println('M16B-GUEST ${name} exit=${result.exit_code} expected=${expected} elapsed_ms=${elapsed/1000000}')
+	if result.exit_code != expected { return error('${name} failed') }
 	return text
 }
 
@@ -84,7 +80,7 @@ fn qualify() ! {
 		probe := step(dir, 'postunlock-loopback', [...ssh, target, '/usr/bin/vinix-desktop --postunlock-probe'], 0, '')!
 		if !probe.contains('M16B2-POSTUNLOCK: CONNECT_SUCCESS unlocked_HOME=true') { return error('loopback receipt absent') }
 	}
-	scp := ['scp', '-O', ...options, '-P', port, '-i', key]
+	scp := ['scp', '-S', '/home/agent/build/m16b3-receipts/debug-ssh', '-O', ...options, '-P', port, '-i', key]
 	if os.getenv('SSH_STAGE2_BENCH') == '1' {
 		_ := step(dir, 'bench-upload', [...scp, '/home/agent/build/m16b2-receipts/aes-bench', target + ':/tmp/m16b2-aes-bench'], 0, '')!
 		_ := step(dir, 'bench-guest', [...ssh, target, '/tmp/m16b2-aes-bench'], 0, '')!
@@ -125,6 +121,11 @@ fn qualify() ! {
 		if hash_file(dir + '/tree/' + name)! != hash_file(dir + '/returned/' + name)! { return error('recursive readback differs') }
 	}
 	_ := step(dir, 'post-transfer-exec', [...ssh, target, 'echo AFTER_SCP_OK'], 0, '')!
+	sustained := step(dir, 'sustained-session', [...ssh, target,
+		'echo M16B3_SESSION_BEGIN; sleep 210; echo M16B3_SESSION_AFTER'], 0, '')!
+	if !sustained.contains('M16B3_SESSION_BEGIN') || !sustained.contains('M16B3_SESSION_AFTER') {
+		return error('sustained post-transfer session failed')
+	}
 	os.write_file(dir + '/PASS', 'M16B_GUEST_ACCEPTANCE_PASS\n')!
 	println('M16B_GUEST_ACCEPTANCE_PASS')
 }
