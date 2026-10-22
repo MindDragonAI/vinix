@@ -22,7 +22,15 @@ NTLMv1, Kerberos-only policy, SMB3 encryption, guest signing, reparse points,
 hard links and symlinks are unsupported. The first rejected NTLM token emits
 an explicit mechanism-policy diagnostic. Authenticated requests use SMB2.1
 HMAC-SHA256 signing; response signatures and message/session/tree identities
-are checked. Invalid framing kills the connection.
+are checked. Invalid framing poisons the client stream; later operations fail
+closed. A poisoned cached session is not reconnected automatically.
+
+There is one outstanding request at a time. One unsigned STATUS_PENDING
+notification is accepted, as required by MS-SMB2 3.2.5.1.3; the final response
+must match the message, session and AsyncId and retain its mandatory named-
+session signature. Repeated pending replies, compounds, unsolicited messages
+and cancellation are unsupported. TCP transfers use nonblocking socket calls,
+bounded EAGAIN retries and a 15-second deadline per transfer.
 
 ## VFS and lifetime limits
 
@@ -36,6 +44,8 @@ or modifying the replacement. Host in-place edits with the same inode remain
 visible to retained VFS descriptors. Append
 is serialized within this client, without a cross-client atomicity guarantee.
 POSIX uid/gid/mode fidelity and open-after-unlink semantics are unsupported.
+Direct fstat can retain the last refreshed metadata: the shared VFS has no
+general stat-refresh callback. Permission/open paths refresh the backend.
 Descriptors reopen by path rather than retaining a server handle: deletion
 can fail with ENOENT and replacement fails closed. Known cached aliases of a
 rename source cause rename to fail EBUSY; a successful rename updates cached
