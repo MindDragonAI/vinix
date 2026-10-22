@@ -409,7 +409,7 @@ fn (mut b Boot) launch(root string, iso string, disk string, qemu string) ! {
 	if qmp_path.len >= 104 || secret_path.len >= 104 { return error('run path too long') }
 	code := root + '/OVMF_CODE.4m.fd'
 	vars := root + '/OVMF_VARS.4m.fd'
-	args := ['-name', 'vinix-m16b-ssh', '-nodefaults', '-M', 'q35,smm=off', '-enable-kvm', '-cpu',
+	mut args := ['-name', 'vinix-m16b-ssh', '-nodefaults', '-M', 'q35,smm=off', '-enable-kvm', '-cpu',
 		'host', '-smp', '4', '-m', '4096', '-vga', 'std', '-drive',
 		'if=pflash,format=raw,unit=0,readonly=on,file=' + code, '-drive',
 		'if=pflash,format=raw,unit=1,file=' + vars, '-drive',
@@ -421,6 +421,9 @@ fn (mut b Boot) launch(root string, iso string, disk string, qemu string) ! {
 		'-display', 'none', '-monitor', 'none', '-serial', 'file:' + b.serial_log, '-serial',
 		'unix:' + secret_path + ',server=on,wait=off', '-qmp',
 		'unix:' + qmp_path + ',server=on,wait=off', '-no-reboot', '-S']
+	if os.getenv('SSH_STAGE2_PCAP') == '1' {
+		args << ['-object', 'filter-dump,id=sshcap,netdev=sshnet,file=' + root + '/network.pcap']
+	}
 	b.process = os.new_process(qemu)
 	b.process.set_args(args)
 	b.process.set_redirect_stdio()

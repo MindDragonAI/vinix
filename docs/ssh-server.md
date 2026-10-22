@@ -329,3 +329,10 @@ or refusal gates. Optional test-only `SSH_STAGE2_DIAGNOSTICS=1` samples process
 accounting to nonsecret COM1, and `SSH_STAGE2_PCAP=1` enables a QEMU packet dump.
 These are diagnostics, not production service settings or qualification passes.
 The Stage 2 report owns the final verdict and measured before/after results.
+
+Stage 2 remains NO-GO: the actual guest refusal/success probes passed, but the
+final 50 MiB upload closed remotely at 151.188 seconds, before its 900-second
+limit. Streaming RSS stabilized after the repair; closure causality remains
+unproven. Guest download/hash and recursive acceptance were not reached. A
+separate small probe measured encrypted-HOME writes at the same slow rate
+with and without SSH; do not label that as a proven SSH-window defect.

@@ -60,3 +60,15 @@ The pre-unlock check and post-unlock check both target guest 127.0.0.1:22;
 the host-forward listener is not substituted for either check. A failed upload
 also attempts a bounded collection of the daemon log, partial size and memory
 status before the controller destroys its disposable guest.
+
+Optional Stage 2 diagnostics are not acceptance substitutes:
+`SSH_STAGE2_DIAGNOSTICS=1` starts the bounded V process-accounting sampler on
+nonsecret COM1; `SSH_STAGE2_PCAP=1` records guest packets in the run directory.
+`SSH_STAGE2_BENCH=1` also requires the separately built fixed-path AES benchmark
+on the host. Never collect COM2 or HOME raw disks with these receipts.
+
+Stage 2 guest-r4 passed strict refusal and post-unlock loopback success, but
+the 50 MiB upload closed remotely after 151.188 seconds despite the 900-second
+command limit. The bounded-memory repair passed target tests and reduced the
+observed growth; it did not fix that closure. Full guest hash/download and
+recursive qualification remain unverified. The Stage 2 operator gate is NO-GO.

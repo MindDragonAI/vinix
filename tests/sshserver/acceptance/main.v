@@ -85,10 +85,18 @@ fn qualify() ! {
 		if !probe.contains('M16B2-POSTUNLOCK: CONNECT_SUCCESS unlocked_HOME=true') { return error('loopback receipt absent') }
 	}
 	scp := ['scp', '-O', ...options, '-P', port, '-i', key]
+	if os.getenv('SSH_STAGE2_BENCH') == '1' {
+		_ := step(dir, 'bench-upload', [...scp, '/home/agent/build/m16b2-receipts/aes-bench', target + ':/tmp/m16b2-aes-bench'], 0, '')!
+		_ := step(dir, 'bench-guest', [...ssh, target, '/tmp/m16b2-aes-bench'], 0, '')!
+	}
 	source := '/home/agent/build/m16b-receipts/host-interop-r1/large'
 	if os.file_size(source) != 50 * 1024 * 1024 { return error('50 MiB source checkpoint missing') }
 	a := hash_file(source)!
 	if a != 'e35db3f4d24be1f8c653f7980519cf4ec475fc2edddab49b566bffd30276869e' { return error('source differs from known SHA256') }
+	if os.getenv('SSH_STAGE2_DIAGNOSTICS') == '1' {
+		_ := step(dir, 'start-perf-sampler', [...ssh, target,
+			'setsid /usr/bin/vinix-desktop --perf-sampler </dev/null >/dev/null 2>&1 &'], 0, '')!
+	}
 	_ := step(dir, 'scp-upload-50m', [...scp, source, target + ':/root/home/m16b/large-copy'], 0, '') or {
 		step(dir, 'upload-failure-diagnostics', [...ssh, target,
 			'cat /root/.vinix-service-logs/ssh-server.log; ls -l /root/home/m16b/large-copy; cat /proc/meminfo'], 0, '') or {}

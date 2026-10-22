@@ -5,6 +5,7 @@ module main
 import desktop.sessiondaemon
 import os
 import net
+import time
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -160,6 +161,20 @@ fn postunlock_probe() ! {
 
 fn main() {
 	serial_note('M16B-SEED: main entry\n')
+	if os.args.len == 2 && os.args[1] == '--perf-sampler' {
+		for _ in 0 .. 90 {
+			serial_note('M16B2_SAMPLE uptime=' + (os.read_file('/proc/uptime') or { 'unavailable\n' }))
+			serial_note(os.read_file('/proc/meminfo') or { 'meminfo unavailable\n' })
+			for name in os.ls('/proc') or { []string{} } {
+				if name.len > 0 && name.bytes().all(it >= `0` && it <= `9`) {
+					stat := os.read_file('/proc/' + name + '/stat') or { continue }
+					serial_note('M16B2_STAT ' + stat)
+				}
+			}
+			time.sleep(2 * time.second)
+		}
+		return
+	}
 	if os.args.len == 2 && os.args[1] == '--postunlock-probe' {
 		postunlock_probe() or { eprintln('M16B2-POSTUNLOCK: FAIL'); exit(1) }
 		return
