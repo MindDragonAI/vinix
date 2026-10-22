@@ -108,7 +108,9 @@ pub fn ssh_key_directory_ready() bool {
 	if fd < 0 { return false }
 	defer { C.close(fd) }
 	mut st := C.stat{}
-	return C.fstat(fd, &st) == 0 && st.st_uid == 0 && u32(st.st_mode) & 0o7777 == 0o700
+	// A distribution's existing /etc/ssh is normally 0755. Public directory
+	// traversal does not expose a 0600 host seed; only write access is unsafe.
+	return C.fstat(fd, &st) == 0 && st.st_uid == 0 && u32(st.st_mode) & 0o022 == 0
 }
 
 fn (mut daemon SessionDaemon) load_ssh_service() {
