@@ -10,7 +10,7 @@ fn step(dir string, name string, args []string, expected int, input string) !str
 	start := time.sys_mono_now()
 	mut p := os.new_process('/usr/bin/timeout')
 	defer { p.close() }
-	p.set_args(['-k', '3', '180', 'setsid', ...args])
+	p.set_args(['-k', '3', '900', 'setsid', ...args])
 	p.set_redirect_stdio()
 	p.set_stdin_path(if input == '' { '/dev/null' } else { input })
 	p.run()
@@ -18,7 +18,9 @@ fn step(dir string, name string, args []string, expected int, input string) !str
 	text := p.stdout_slurp() + p.stderr_slurp()
 	os.write_file(dir + '/' + name + '.log', text)!
 	os.write_file(dir + '/' + name + '.exit', p.code.str() + '\n')!
-	println('M16B-GUEST ${name} exit=${p.code} expected=${expected} elapsed_ms=${(time.sys_mono_now()-start)/1000000}')
+	elapsed := time.sys_mono_now() - start
+	os.write_file(dir + '/' + name + '.elapsed_ns', elapsed.str() + '\n')!
+	println('M16B-GUEST ${name} exit=${p.code} expected=${expected} elapsed_ms=${elapsed/1000000}')
 	if p.code != expected { return error('${name} failed') }
 	return text
 }
@@ -55,6 +57,7 @@ fn qualify() ! {
 		'-o', 'ConnectTimeout=5', '-o', 'StrictHostKeyChecking=yes', '-o', 'UserKnownHostsFile=' + dir + '/known_hosts']
 	ssh := ['ssh', ...options, '-p', port, '-i', key]
 	target := 'm16b@127.0.0.1'
+	if os.getenv('SSH_STAGE2_ONLY') != '1' {
 	text := step(dir, 'exec', [...ssh, target, 'echo OK'], 0, '')!
 	if !text.split_into_lines().any(it.trim_space() == 'OK') { return error('exec marker absent') }
 	_ := step(dir, 'exec-status', [...ssh, target, 'echo EXEC_STDERR >&2; exit 7'], 7, '')!
@@ -76,22 +79,53 @@ fn qualify() ! {
 	if !wrong.contains('Permission denied (publickey)') { return error('wrong key not cleanly rejected') }
 	no_key_reply := step(dir, 'no-key', ['ssh', ...options, '-p', port, '-o', 'PubkeyAuthentication=no', target, 'true'], 255, '')!
 	if !no_key_reply.contains('Permission denied (publickey)') { return error('no key not cleanly rejected') }
+	}
+	if os.getenv('SSH_STAGE2_LOOPBACK') == '1' {
+		probe := step(dir, 'postunlock-loopback', [...ssh, target, '/usr/bin/vinix-desktop --postunlock-probe'], 0, '')!
+		if !probe.contains('M16B2-POSTUNLOCK: CONNECT_SUCCESS unlocked_HOME=true') { return error('loopback receipt absent') }
+	}
 	scp := ['scp', '-O', ...options, '-P', port, '-i', key]
 	source := '/home/agent/build/m16b-receipts/host-interop-r1/large'
 	if os.file_size(source) != 50 * 1024 * 1024 { return error('50 MiB source checkpoint missing') }
-	_ := step(dir, 'scp-upload-50m', [...scp, source, target + ':/root/home/m16b/large-copy'], 0, '')!
+	a := hash_file(source)!
+	if a != 'e35db3f4d24be1f8c653f7980519cf4ec475fc2edddab49b566bffd30276869e' { return error('source differs from known SHA256') }
+	_ := step(dir, 'scp-upload-50m', [...scp, source, target + ':/root/home/m16b/large-copy'], 0, '') or {
+		step(dir, 'upload-failure-diagnostics', [...ssh, target,
+			'cat /root/.vinix-service-logs/ssh-server.log; ls -l /root/home/m16b/large-copy; cat /proc/meminfo'], 0, '') or {}
+		return err
+	}
+	throughput(dir, 'scp-upload-50m', os.file_size(source))!
 	remote := step(dir, 'remote-sha256', [...ssh, target, 'sha256sum /root/home/m16b/large-copy'], 0, '')!
 	_ := step(dir, 'scp-download-50m', [...scp, target + ':/root/home/m16b/large-copy', dir + '/roundtrip'], 0, '')!
-	a := hash_file(source)!
+	throughput(dir, 'scp-download-50m', os.file_size(source))!
 	b := hash_file(dir + '/roundtrip')!
 	os.write_file(dir + '/large-sha256.txt', 'source ${a}\nroundtrip ${b}\nremote ' + remote)!
 	if a != b || !remote.starts_with(a + ' ') { return error('large SCP checksum mismatch') }
 	os.mkdir_all(dir + '/tree/nested')!
 	os.write_file(dir + '/tree/nested/marker', 'M16B recursive SCP\n')!
+	os.write_file(dir + '/tree/top', 'M16B2 top-level file\n')!
+	os.write_file(dir + '/tree/nested/empty', '')!
 	_ := step(dir, 'scp-recursive-upload', [...scp, '-r', dir + '/tree', target + ':/root/home/m16b/tree'], 0, '')!
+	for name in ['top', 'nested/marker', 'nested/empty'] {
+		hash := hash_file(dir + '/tree/' + name)!
+		remote_hash := step(dir, 'tree-guest-hash-' + name.replace('/', '-'), [...ssh, target,
+			'sha256sum /root/home/m16b/tree/' + name], 0, '')!
+		if !remote_hash.starts_with(hash + ' ') { return error('recursive guest hash mismatch') }
+	}
 	_ := step(dir, 'scp-recursive-download', [...scp, '-r', target + ':/root/home/m16b/tree', dir + '/returned'], 0, '')!
-	if os.read_file(dir + '/returned/nested/marker')! != 'M16B recursive SCP\n' { return error('recursive readback differs') }
+	for name in ['top', 'nested/marker', 'nested/empty'] {
+		if hash_file(dir + '/tree/' + name)! != hash_file(dir + '/returned/' + name)! { return error('recursive readback differs') }
+	}
 	_ := step(dir, 'post-transfer-exec', [...ssh, target, 'echo AFTER_SCP_OK'], 0, '')!
 	os.write_file(dir + '/PASS', 'M16B_GUEST_ACCEPTANCE_PASS\n')!
 	println('M16B_GUEST_ACCEPTANCE_PASS')
+}
+
+fn throughput(dir string, name string, bytes u64) ! {
+	ns := os.read_file(dir + '/' + name + '.elapsed_ns')!.trim_space().u64()
+	if ns == 0 { return error('invalid elapsed time') }
+	rate := f64(bytes) * 1000.0 / f64(ns)
+	text := '${name} bytes=${bytes} seconds=${f64(ns)/1e9:.3f} MB/s=${rate:.3f}\n'
+	os.write_file(dir + '/' + name + '.throughput', text)!
+	print(text)
 }

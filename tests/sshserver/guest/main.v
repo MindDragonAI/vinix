@@ -122,6 +122,9 @@ fn preunlock_probe() ! {
 		serial_note('M16B-PREUNLOCK: socket error=${code}\n')
 	}
 	if result == 0 || code != C.ECONNREFUSED { return error('guest TCP refusal not proven') }
+	mut banner := [256]u8{}
+	if C.recv(fd, &banner[0], usize(banner.len), C.MSG_DONTWAIT) > 0 { return error('closed port returned banner data') }
+	serial_note('M16B2-PREUNLOCK: errno=111 banner_bytes=0 auth_exchange=false\n')
 	serial := C.open(c'/dev/com1', C.O_WRONLY | C.O_CLOEXEC)
 	if serial < 0 { return error('serial receipt unavailable') }
 	defer { C.close(serial) }
@@ -131,8 +134,36 @@ fn preunlock_probe() ! {
 	}
 }
 
+fn postunlock_probe() ! {
+	if !sessiondaemon.ssh_encrypted_home_ready() { return error('HOME is locked') }
+	addresses := net.resolve_addrs('127.0.0.1:22', .ip, .tcp)!
+	address := addresses[0]
+	fd := C.socket(C.AF_INET, C.SOCK_STREAM, 0)
+	if fd < 0 { return error('probe socket unavailable') }
+	defer { C.close(fd) }
+	flags := C.fcntl(fd, C.F_GETFL)
+	if flags < 0 || C.fcntl(fd, C.F_SETFL, flags | C.O_NONBLOCK) != 0 { return error('probe nonblocking failed') }
+	result := C.connect(fd, voidptr(&address), address.len())
+	if result != 0 {
+		if C.errno != C.EINPROGRESS { return error('post-unlock connect failed') }
+		mut polling := C.pollfd{ fd: fd, events: C.POLLOUT }
+		if C.poll(&polling, 1, 2000) <= 0 { return error('probe connect timeout') }
+		mut code := i32(0)
+		mut length := u32(sizeof(i32))
+		if C.getsockopt(fd, C.SOL_SOCKET, C.SO_ERROR, &code, &length) != 0 || code != 0 {
+			return error('post-unlock socket failed')
+		}
+	}
+	serial_note('M16B2-POSTUNLOCK: CONNECT_SUCCESS unlocked_HOME=true\n')
+	println('M16B2-POSTUNLOCK: CONNECT_SUCCESS unlocked_HOME=true')
+}
+
 fn main() {
 	serial_note('M16B-SEED: main entry\n')
+	if os.args.len == 2 && os.args[1] == '--postunlock-probe' {
+		postunlock_probe() or { eprintln('M16B2-POSTUNLOCK: FAIL'); exit(1) }
+		return
+	}
 	if os.args.len == 2 && os.args[1] == '--preunlock-probe' {
 		preunlock_probe() or {
 			serial_note('M16B-PREUNLOCK: FAIL ${err.msg()}\n')

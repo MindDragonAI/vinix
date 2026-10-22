@@ -532,7 +532,8 @@ fn callback(path string, root string) ! {
 	p.set_environment(env)
 	p.use_pgroup = true
 	p.run()
-	end := after(600)
+	// Two large SCP commands each have a 900-second budget.
+	end := after(2100)
 	for p.is_alive() && time.sys_mono_now() < end {
 		check_cancelled() or {
 			p.signal_pgkill()

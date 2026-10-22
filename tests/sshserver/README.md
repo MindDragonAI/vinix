@@ -45,3 +45,18 @@ remaining transfer checks. Preserve and reverify their existing receipts.
 
 The controller retains NO-GO if the strict pre-unlock refusal check fails, even
 when it continues through real enrollment to collect transport diagnostics.
+
+Stage 2 uses a 900-second per-command limit and a 2100-second outer callback
+budget. Set `SSH_STAGE2_ONLY=1` on the controller to skip the already-qualified
+shell/auth/session suite, not to waive either remaining gate. The callback
+checks the fixed 50 MiB source SHA256, the guest hash, the downloaded hash,
+and guest/host hashes for three recursive-tree files. Elapsed nanoseconds and
+decimal MB/s are retained separately for both large transfer directions.
+
+With the Stage 2 guest helper installed, set `SSH_STAGE2_LOOPBACK=1` as well.
+Before unlock the helper requires ECONNREFUSED and no readable banner bytes.
+After service start the callback invokes its bounded loopback-connect probe.
+The pre-unlock check and post-unlock check both target guest 127.0.0.1:22;
+the host-forward listener is not substituted for either check. A failed upload
+also attempts a bounded collection of the daemon log, partial size and memory
+status before the controller destroys its disposable guest.
