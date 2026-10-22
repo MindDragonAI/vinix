@@ -3,6 +3,7 @@ module main
 
 import os
 import math
+import time
 
 const scp_max_file = u64(1073741824)
 const scp_max_depth = 32
@@ -31,7 +32,12 @@ fn scp_set_time(fd int, stamp ScpTime) ! {
 	if !stamp.valid { return }
 	times := [C.timespec{ tv_sec: stamp.atime, tv_nsec: stamp.ansec },
 		C.timespec{ tv_sec: stamp.mtime, tv_nsec: stamp.mnsec }]!
-	if C.futimens(fd, &times[0]) != 0 { return error('SCP timestamp update') }
+	result := C.futimens(fd, &times[0])
+	code := if result != 0 { int(C.errno) } else { 0 }
+	if result != 0 {
+		diagnostic_io('futimens', fd, code, i64(result), 0, 0)
+		return error('SCP timestamp update')
+	}
 }
 
 // A small literal shell-word decoder for OpenSSH's scp command. No expansion,
@@ -295,25 +301,64 @@ fn scp_receive(o ScpOptions) ! {
 }
 
 fn receive_file(fd int, record ScpRecord, stamp ScpTime) ! {
+	started := time.sys_mono_now()
+	mut op := 'fstat'
+	mut code := 0
+	mut remaining := record.size
+	mut complete := false
+	// One receipt for a failed file. No filename, mode, timestamp or
+	// protocol text is printed; fd I/O receipts carry partial syscall progress.
+	defer {
+		saved := C.errno
+		mut line := [2048]char{}
+		n := unsafe { C.snprintf(&line[0], 2048, c'vinix-sshd-diag event=scp-receive-file complete=%d op=%s errno=%lld errno_valid=%d size=%llu completed_bytes=%llu remaining=%llu elapsed_ms=%llu\n',
+			i32(complete), op.str, i64(code), i32(code >= 0), record.size, record.size - remaining, remaining,
+			u64((time.sys_mono_now() - started) / 1000000)) }
+		if !complete { diagnostic_write(&line[0], n) }
+		C.errno = saved
+	}
 	mut s := C.stat{}
-	if C.fstat(fd, &s) != 0 || C.S_ISREG(s.st_mode) == 0 || C.ftruncate(fd, 0) != 0 {
+	stat_result := C.fstat(fd, &s)
+	code = if stat_result != 0 { int(C.errno) } else { 0 }
+	if stat_result != 0 {
 		return error('SCP target not regular')
 	}
+	op = 'regular-file-check'
+	if C.S_ISREG(s.st_mode) == 0 { return error('SCP target not regular') }
+	op = 'ftruncate'
+	truncate_result := C.ftruncate(fd, 0)
+	code = if truncate_result != 0 { int(C.errno) } else { 0 }
+	if truncate_result != 0 { return error('SCP target not regular') }
+	op = 'initial-ack-write'
+	code = -1 // Helper failures have their own fd-io receipt with exact errno.
 	scp_ok()!
-	mut remaining := record.size
 	mut buffer := []u8{len: 32768}
 	defer { unsafe { buffer.free() } }
 	for remaining > 0 {
 		size := int(math.min(remaining, u64(32768)))
 		mut data := unsafe { buffer[..size] }
+		op = 'file-data-read'
 		read_into_fd(0, mut data)!
+		op = 'file-data-write'
 		write_fd(fd, data)!
 		remaining -= u64(size)
 	}
+	op = 'sender-ack-read'
 	scp_ack()!
+	op = 'timestamp'
 	scp_set_time(fd, stamp)!
-	if C.fchmod(fd, record.mode) != 0 || C.fsync(fd) != 0 { return error('SCP file fsync/mode') }
+	op = 'fchmod'
+	mode_result := C.fchmod(fd, record.mode)
+	code = if mode_result != 0 { int(C.errno) } else { 0 }
+	if mode_result != 0 { return error('SCP file fsync/mode') }
+	op = 'fsync'
+	sync_result := C.fsync(fd)
+	code = if sync_result != 0 { int(C.errno) } else { 0 }
+	if sync_result != 0 { return error('SCP file fsync/mode') }
+	op = 'final-ack-write'
+	code = -1
 	scp_ok()!
+	complete = true
 }
 
 struct C.DIR {}

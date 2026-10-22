@@ -89,8 +89,11 @@ fn run() ! {
 	for {
 		mut socket := listener.accept()!
 		$if ssh_session_workers ? {
+			worker_started := time.sys_mono_now()
 			pid := C.fork()
+			fork_code := if pid < 0 { int(C.errno) } else { 0 }
 			if pid < 0 {
+				diagnostic_io('session-worker-fork', -1, fork_code, i64(pid), 0, 0)
 				socket.close() or {}
 				unsafe { free(socket) }
 				return error('session worker fork failed')
@@ -101,9 +104,16 @@ fn run() ! {
 				C.close(socket.sock.handle)
 				unsafe { free(socket) }
 				mut status := i32(0)
-				for C.waitpid(pid, &status, 0) < 0 {
-					if C.errno != C.EINTR { return error('session worker wait failed') }
+				for {
+					result := C.waitpid(pid, &status, 0)
+					code := if result < 0 { int(C.errno) } else { 0 }
+					if result >= 0 { break }
+					if code != C.EINTR {
+						diagnostic_io('session-worker-waitpid', pid, code, i64(result), 0, 0)
+						return error('session worker wait failed')
+					}
 				}
+				diagnostic_worker(pid, status, worker_started)
 				continue
 			}
 			// Likewise, do not shut down the supervisor's inherited listening socket.
@@ -124,11 +134,21 @@ fn run() ! {
 }
 
 fn serve(mut t Transport, config Config, key signing.PrivateKey, mut budget FailureBudget) ! {
-	if !budget.available() { return error('authentication budget exhausted') }
-	t.handshake(key)!
-	keys := authorized_keys(config.home)!
-	t.authenticate(config.user, keys, mut budget)!
+	mut in_session := false
+	defer { if !in_session { t.diagnostic('serve-error', &Channel{}, true) } }
+	t.diag_phase = 'authentication-budget'
+	if !budget.available() {
+		t.diag_cause = 'authentication-budget-exhausted'
+		return error('authentication budget exhausted')
+	}
+	t.diag_phase = 'handshake'
+	t.handshake(key) or { t.diagnostic_error(err); return err }
+	t.diag_phase = 'authorized-keys'
+	keys := authorized_keys(config.home) or { t.diagnostic_error(err); return err }
+	t.diag_phase = 'authentication'
+	t.authenticate(config.user, keys, mut budget) or { t.diagnostic_error(err); return err }
 	t.socket.set_read_deadline(time.now().add(3600 * time.second))
 	t.socket.set_write_deadline(time.now().add(3600 * time.second))
+	in_session = true
 	t.session_loop(config)!
 }

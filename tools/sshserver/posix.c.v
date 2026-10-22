@@ -15,6 +15,33 @@ import time
 #include <dirent.h>
 #include <sys/syscall.h>
 #include <sys/mman.h>
+#include <stdio.h>
+
+// Fixed stack storage and literal labels only: diagnostics must not retain V
+// interpolation temporaries in a -gc none worker, or disclose peer contents.
+fn diagnostic_write(data &char, n int) {
+	code := C.errno
+	if n > 0 { C.write(2, data, usize(if n < 2048 { n } else { 2047 })) }
+	C.errno = code
+}
+
+fn diagnostic_io(op string, fd int, code int, result i64, done int, wanted int) {
+	saved := C.errno
+	mut line := [2048]char{}
+	n := unsafe { C.snprintf(&line[0], 2048, c'vinix-sshd-diag event=fd-io op=%s fd=%lld errno=%lld result=%lld partial=%lld requested=%lld\n',
+		op.str, i64(fd), i64(code), result, i64(done), i64(wanted)) }
+	diagnostic_write(&line[0], n)
+	C.errno = saved
+}
+
+fn diagnostic_worker(pid int, status i32, started u64) {
+	saved := C.errno
+	mut line := [2048]char{}
+	n := unsafe { C.snprintf(&line[0], 2048, c'vinix-sshd-diag event=session-worker-exit pid=%lld raw_status=%lld elapsed_ms=%llu\n',
+		i64(pid), i64(status), u64((time.sys_mono_now() - started) / 1000000)) }
+	diagnostic_write(&line[0], n)
+	C.errno = saved
+}
 
 fn C.mmap(voidptr, usize, int, int, int, i64) voidptr
 fn C.munmap(voidptr, usize) int
@@ -68,6 +95,9 @@ mut:
 	errors int = -1
 	reaped bool
 	status i32
+	// Last waitpid observation, including failures; status is valid only if reaped.
+	wait_result int
+	wait_errno int
 }
 
 fn nonblock(fd int) ! {
@@ -153,7 +183,11 @@ fn pipe_child(argv []string, environment []string, home string) !Child {
 
 fn (mut c Child) reap() {
 	if c.pid > 0 && !c.reaped {
-		if C.waitpid(c.pid, &c.status, C.WNOHANG) == c.pid { c.reaped = true }
+		result := C.waitpid(c.pid, &c.status, C.WNOHANG)
+		code := if result < 0 { int(C.errno) } else { 0 }
+		c.wait_result = result
+		c.wait_errno = code
+		if result == c.pid { c.reaped = true }
 	}
 }
 
@@ -185,11 +219,14 @@ fn (mut c Child) cleanup() {
 		C.kill(c.pid, C.SIGKILL)
 		for {
 			result := C.waitpid(c.pid, &c.status, 0)
-			if result == c.pid || (result < 0 && C.errno == C.ECHILD) {
+			code := if result < 0 { int(C.errno) } else { 0 }
+			c.wait_result = result
+			c.wait_errno = code
+			if result == c.pid || (result < 0 && code == C.ECHILD) {
 				c.reaped = true
 				break
 			}
-			if result < 0 && C.errno != C.EINTR { break }
+			if result < 0 && code != C.EINTR { break }
 		}
 	}
 }
@@ -208,8 +245,12 @@ fn read_into_fd(fd int, mut data []u8) ! {
 	mut pos := 0
 	for pos < data.len {
 		count := unsafe { C.read(fd, &data[pos], usize(data.len - pos)) }
-		if count < 0 && C.errno == C.EINTR { continue }
-		if count <= 0 { return error('short read') }
+		code := if count < 0 { int(C.errno) } else { 0 }
+		if count < 0 && code == C.EINTR { continue }
+		if count <= 0 {
+			diagnostic_io('read', fd, code, i64(count), pos, data.len)
+			return error('short read')
+		}
 		pos += int(count)
 	}
 }
@@ -218,8 +259,12 @@ fn write_fd(fd int, data []u8) ! {
 	mut pos := 0
 	for pos < data.len {
 		n := unsafe { C.write(fd, &data[pos], usize(data.len - pos)) }
-		if n < 0 && C.errno == C.EINTR { continue }
-		if n <= 0 { return error('write failed') }
+		code := if n < 0 { int(C.errno) } else { 0 }
+		if n < 0 && code == C.EINTR { continue }
+		if n <= 0 {
+			diagnostic_io('write', fd, code, i64(n), pos, data.len)
+			return error('write failed')
+		}
 		pos += int(n)
 	}
 }
