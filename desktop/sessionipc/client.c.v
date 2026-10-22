@@ -98,18 +98,32 @@ pub fn session_connect() ?int {
 
 pub fn session_send(fd int, data string) bool {
 	mut offset := 0
+	started := monotonic_millis()
 	deadline := monotonic_millis() + 100
 	for offset < data.len {
 		mut readiness := C.pollfd{ fd: fd, events: C.POLLOUT }
 		remaining := deadline - monotonic_millis()
-		if remaining <= 0 || C.poll(&readiness, 1, int(remaining)) <= 0 { return false }
+		if remaining <= 0 {
+			session_transport_diagnostic('send-deadline', fd, 0, 0, offset, data.len, monotonic_millis()-started)
+			return false
+		}
+		polled := C.poll(&readiness, 1, int(remaining))
+		poll_errno := if polled < 0 { int(C.errno) } else { 0 }
+		if polled <= 0 {
+			session_transport_diagnostic('send-poll', fd, polled, poll_errno, offset, data.len, monotonic_millis()-started)
+			return false
+		}
 		$if macos {
 			signal_option := i32(1)
 			C.setsockopt(fd, C.SOL_SOCKET, C.SO_NOSIGPIPE, &signal_option, u32(sizeof(i32)))
 		}
 		flags := $if macos { 0 } $else { C.MSG_NOSIGNAL }
 		n := unsafe { C.send(fd, &data.str[offset], usize(data.len - offset), flags) }
-		if n <= 0 { return false }
+		code := if n < 0 { int(C.errno) } else { 0 }
+		if n <= 0 {
+			session_transport_diagnostic('send', fd, n, code, offset, data.len, monotonic_millis()-started)
+			return false
+		}
 		offset += n
 	}
 	return true
@@ -120,27 +134,64 @@ pub fn session_receive(fd int) !string {
 }
 
 pub fn session_receive_timeout(fd int, timeout int) !string {
+	return session_receive_reply(fd, timeout, false)
+}
+
+// Only an untouched control reply may survive a timeout. Startup and public
+// connections keep their original fail-closed behavior.
+struct SessionReplyNotStarted {
+	message string
+}
+
+fn (err SessionReplyNotStarted) msg() string { return err.message }
+fn (err SessionReplyNotStarted) code() int { return 0 }
+
+fn session_receive_reply(fd int, timeout int, allow_idle bool) !string {
+	deadline := monotonic_millis() + timeout
 	mut header := [4]u8{}
-	session_read_exact(fd, &header[0], 4, timeout)!
+	session_read_exact_idle(fd, &header[0], 4, timeout, allow_idle)!
 	length := int(u32(header[0]) | u32(header[1]) << 8 | u32(header[2]) << 16 | u32(header[3]) << 24)
 	if length < 1 || length > 256 * 1024 { return error('invalid session message length') }
 	mut bytes := []u8{len: length}
 	defer { unsafe { bytes.free() } }
-	session_read_exact(fd, bytes.data, length, timeout)!
+	body_timeout := if allow_idle { int(deadline - monotonic_millis()) } else { timeout }
+	session_read_exact(fd, bytes.data, length, body_timeout)!
 	return unsafe { tos(bytes.data, length).clone() }
 }
 
 pub fn session_read_exact(fd int, bytes &u8, length int, timeout int) ! {
+	session_read_exact_idle(fd, bytes, length, timeout, false)!
+}
+
+fn session_read_exact_idle(fd int, bytes &u8, length int, timeout int, allow_idle bool) ! {
 	mut count := 0
+	started := monotonic_millis()
 	deadline := monotonic_millis() + timeout
 	for count < length {
 		mut readiness := C.pollfd{ fd: fd, events: C.POLLIN }
 		remaining := deadline - monotonic_millis()
-		if remaining <= 0 || C.poll(&readiness, 1, int(remaining)) <= 0 {
+		if remaining <= 0 {
+			session_transport_diagnostic('read-deadline', fd, 0, 0, count, length, monotonic_millis()-started)
+			if allow_idle && count == 0 {
+				return SessionReplyNotStarted{message: 'session services busy'.clone()}
+			}
+			return error('session request timed out')
+		}
+		polled := C.poll(&readiness, 1, int(remaining))
+		poll_errno := if polled < 0 { int(C.errno) } else { 0 }
+		if polled <= 0 {
+			session_transport_diagnostic('read-poll', fd, polled, poll_errno, count, length, monotonic_millis()-started)
+			if polled == 0 && allow_idle && count == 0 {
+				return SessionReplyNotStarted{message: 'session services busy'.clone()}
+			}
 			return error('session request timed out')
 		}
 		n := unsafe { C.recv(fd, &bytes[count], usize(length - count), 0) }
-		if n <= 0 { return error('session connection closed') }
+		code := if n < 0 { int(C.errno) } else { 0 }
+		if n <= 0 {
+			session_transport_diagnostic('recv', fd, n, code, count, length, monotonic_millis()-started)
+			return error('session connection closed')
+		}
 		count += n
 	}
 }
@@ -194,14 +245,31 @@ fn session_request(request string, timeout int) !string {
 		}
 		session_control_pending = false
 	}
+	deadline := monotonic_millis() + timeout
+	if control && session_control_reply_pending {
+		// Discard the old frame before sending anything else: replies carry no
+		// request ID, so sending first could attribute stale data to a new call.
+		stale := session_receive_reply(fd, timeout, true) or {
+			if err !is SessionReplyNotStarted { session_close_control() }
+			return err
+		}
+		unsafe { stale.free() }
+		session_control_reply_pending = false
+		if monotonic_millis() >= deadline { return error('session services busy') }
+	}
 	if !session_send_message(fd, request) {
 		if control { session_close_control() }
 		return error('could not send session request')
 	}
-	reply := session_receive_timeout(fd, timeout) or {
-		// A timeout can leave a partial frame. Never reuse or reconnect a lost
-		// control channel; a new broker needs a new inherited endpoint.
-		if control { session_close_control() }
+	reply_timeout := if control { int(deadline - monotonic_millis()) } else { timeout }
+	reply := session_receive_reply(fd, reply_timeout, control) or {
+		if control {
+			if err is SessionReplyNotStarted {
+				session_control_reply_pending = true
+			} else {
+				session_close_control()
+			}
+		}
 		return err
 	}
 	if reply.starts_with('error\t') {
