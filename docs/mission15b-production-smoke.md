@@ -132,3 +132,25 @@ The prior diagnostic results remain historical evidence with the stated boundary
 Operator gate: NO-GO. Remediation requires bounded/validated GPT table arithmetic
 and extents before allocation, recoverable allocation, a malformed-GPT regression
 test, and new qualification of the resulting artifact. No deploy action taken.
+
+Receipt delivery and integrity
+
+Final report: /Users/jefferson/.hermes/profiles/vinix/m15b-production-smoke.report.md.
+Local archive: /Users/jefferson/.hermes/profiles/vinix/m15b-evidence.tar.gz.
+Archive bytes: 142238; SHA256
+a33dc244133eb3450d090abe74195302cbbf23cdc2363e3fdf21b222558fe4ad.
+All 64 unique receipt entries passed local native shasum verification. A V
+validator also checked exact G1-G175 coverage, baseline equality and matching
+local product source snapshots. The full report includes the complete manifest.
+The archive is immutable; later report/delivery metadata is outside it.
+Collector cleanup receipt reports zero owned QEMU and no m15b systemd units.
+Its unzoned host-local timestamp was mistakenly labelled utc; it must not be
+used as a UTC time. No release conclusion depends on that timestamp.
+
+The generated kernel allocation path was additionally checked directly:
+obj/blob.c:117702-117711 calls big_alloc from memory__malloc; :116943-116944
+passes panic_oom=true. No xnu-zone alternate allocation branch is present there.
+Diagnostic generated C input SHA256 (remote m15-receipts/m15-gate.c):
+a30cc0cd9b680b72fe6ff6a3de10bae9a3135f25fa0b923b43aa60b437005124.
+Models: parent sol; Codex sol focused review exited 0 after process-manager
+uptime 646 seconds; Codex sol controller lane cancelled after uptime 777 seconds.
