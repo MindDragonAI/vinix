@@ -55,6 +55,24 @@ fn elf_arch(path string, arch string) ! {
 	}
 }
 
+// The amd64 gate must use the target musl runtime, not a host-glibc
+// compiler masquerading as a musl cross compiler. Match the desktop SDK link.
+fn link_amd64_home_gate(source string, headers string, binary string) ! {
+	sdk := root() + '/build-amd64-userland/staging'
+	gcc_root := sdk + '/usr/lib/gcc/x86_64-alpine-linux-musl'
+	mut versions := os.ls(gcc_root)!
+	versions.sort()
+	if versions.len == 0 { return error('Missing amd64 Alpine GCC SDK') }
+	gcc := gcc_root + '/' + versions.last()
+	lib := sdk + '/usr/lib'
+	run(['clang', '--target=x86_64-linux-musl', '-static', '-nostdinc', '-nostdlib',
+		'-std=c11', '-isystem', gcc + '/include', '-isystem', sdk + '/usr/include',
+		'-D_GNU_SOURCE', '-DVINIX_V_RUNTIME', '-O2', '-fno-stack-protector', '-w',
+		'-I', headers, lib + '/crt1.o', lib + '/crti.o', gcc + '/crtbeginT.o',
+		source, '-L' + lib, '-L' + gcc, '-lgcc_eh', '-lc', '-lgcc', '-lm',
+		gcc + '/crtend.o', lib + '/crtn.o', '-fuse-ld=lld', '-o', binary])!
+}
+
 fn stage_command(args []string, security bool) !int {
 	parsed := hosttest.parse_arguments(args, [
 		hosttest.Option{ name: '--arch', value: true, choices: ['aarch64', 'x86_64'] },
@@ -113,7 +131,11 @@ fn stage_command(args []string, security bool) !int {
 			// builds omit diagnostics, leaving V's static diagnostic literals unused.
 			flags << '-Wno-unused-const-variable'
 		}
-		run([...flags, '-D_GNU_SOURCE', '-DVINIX_V_RUNTIME', '-I', headers, source, '-o', binary])!
+		if tool == 'home-gate' && arch == 'x86_64' {
+			link_amd64_home_gate(source, headers, binary)!
+		} else {
+			run([...flags, '-D_GNU_SOURCE', '-DVINIX_V_RUNTIME', '-I', headers, source, '-o', binary])!
+		}
 		elf_arch(binary, arch)!
 		install(binary, staging + destination, 0o755, if security {
 			'.security-tool-'
