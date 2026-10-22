@@ -11,8 +11,12 @@ fn step(dir string, name string, args []string, expected int, input string) !str
 	// Keep verbose OpenSSH output out of unread pipes while waiting.
 	command := ['timeout', '-k', '3', '900', ...args].map(os.quoted_path(it)).join(' ')
 	result := os.execute(command + ' < ' + os.quoted_path(if input == '' { '/dev/null' } else { input })
-		+ ' > ' + os.quoted_path(dir + '/' + name + '.log') + ' 2>&1')
-	text := os.read_file(dir + '/' + name + '.log')!
+		+ ' > ' + os.quoted_path(dir + '/' + name + '.stdout')
+		+ ' 2> ' + os.quoted_path(dir + '/' + name + '.stderr'))
+	// Preserve the original stdout-first contract. OpenSSH warnings on stderr
+	// must not turn a correct guest checksum into a false prefix mismatch.
+	text := os.read_file(dir + '/' + name + '.stdout')! + os.read_file(dir + '/' + name + '.stderr')!
+	os.write_file(dir + '/' + name + '.log', text)!
 	os.write_file(dir + '/' + name + '.exit', result.exit_code.str() + '\n')!
 	elapsed := time.sys_mono_now() - start
 	os.write_file(dir + '/' + name + '.elapsed_ns', elapsed.str() + '\n')!
