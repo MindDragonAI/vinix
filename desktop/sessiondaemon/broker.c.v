@@ -140,6 +140,7 @@ pub fn run(home string, control int) {
 		policy_record.free()
 	}
 	daemon.load_services()
+	daemon.load_ssh_service()
 	os.signal_opt(.term, session_stop_signal) or {}
 	os.signal_opt(.int, session_stop_signal) or {}
 	state_path := '${home}/.vinix-notifications'
