@@ -3,6 +3,13 @@ module compathost
 import hosttest
 import os
 
+fn test_amd64_home_gate_sdk_matches_builder_overrides() {
+	assert amd64_home_gate_sdk('', '') == root() + '/build-amd64-userland/staging'
+	assert amd64_home_gate_sdk('/custom/userland', '') == '/custom/userland/staging'
+	assert amd64_home_gate_sdk('', '/custom/sdk') == '/custom/sdk'
+	assert amd64_home_gate_sdk('/custom/userland', '/custom/sdk') == '/custom/sdk'
+}
+
 fn test_atomic_stage_permissions_bytes_and_failed_publish_cleanup() {
 	work := hosttest.work_dir('', 'vinix-stage-atomic-check-') or { panic(err) }
 	defer { retire(work) }

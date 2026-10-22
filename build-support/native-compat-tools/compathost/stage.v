@@ -57,8 +57,14 @@ fn elf_arch(path string, arch string) ! {
 
 // The amd64 gate must use the target musl runtime, not a host-glibc
 // compiler masquerading as a musl cross compiler. Match the desktop SDK link.
+fn amd64_home_gate_sdk(userland string, sysroot string) string {
+	if sysroot != '' { return sysroot }
+	if userland != '' { return userland + '/staging' }
+	return root() + '/build-amd64-userland/staging'
+}
+
 fn link_amd64_home_gate(source string, headers string, binary string) ! {
-	sdk := root() + '/build-amd64-userland/staging'
+	sdk := amd64_home_gate_sdk(os.getenv('VINIX_AMD64_USERLAND_BUILD_DIR'), os.getenv('VINIX_AMD64_SYSROOT'))
 	gcc_root := sdk + '/usr/lib/gcc/x86_64-alpine-linux-musl'
 	mut versions := os.ls(gcc_root)!
 	versions.sort()
