@@ -231,7 +231,7 @@ Existing conflicting service names/executables are preserved, and a full
 32-service registry prevents insertion. Settings can persist service records;
 the exact generated service shape is revalidated on broker startup and remains
 disabled if the guard or opt-in fails. A persisted disabled setting is preserved.
-No kernel or general service/build-tool change is included.
+The original optional-service change did not alter the kernel or general build tools.
 
 ### Disposable ISO qualification sources
 
@@ -277,7 +277,7 @@ OpenSSH attempt. Slirp owns the host listening socket throughout the boot, so
 the outer attempt may report reset or closed instead of refused. A host reset
 alone, an auth rejection, or a timeout cannot satisfy this gate.
 After op12 the controller allows at most 180 seconds for an SSH banner, then
-runs the parent-supplied executable callback once, bounded to 600 seconds.
+runs the parent-supplied executable callback once, bounded to 2100 seconds.
 It exports only nonsecret connection/path settings:
 `SSH_HOST=127.0.0.1`, `SSH_PORT=22289`, `SSH_USER=m16b`, `SSH_RUN_DIR`, and
 `SSH_KEY=/home/agent/build/m16b-receipts/host-interop-r1/client` (path only; the
@@ -298,10 +298,34 @@ acceptance: the final gate remains **NO-GO until every guest criterion passes**.
 
 ### Parent operator gate
 
-Mission 16-B remains NO-GO. In disposable encrypted-HOME guest gq5, the actual
+The original Mission 16-B gate was NO-GO. In encrypted-HOME guest gq5, the actual
 broker started SSH after unlock. Exec, status, PTY shell, 20 sessions and wrong/no
 key rejection passed. The pre-unlock closed port returned errno 104 (reset), not
 the strict refusal receipt. The 50 MiB guest upload exceeded the test timeout;
 download, guest hashes and recursive guest SCP therefore remain unqualified.
 Linux large-file/recursive receipts do not substitute for these guest checks.
 The final report carries artifact hashes, raw receipt paths and cleanup proof.
+
+### Stage 2 streaming ownership and refusal semantics
+
+Stage 2 keeps the 256 KiB channel window and returns only consumed/discarded
+input credit. It reuses bounded pending/SCP/output buffers, releases owned
+packet temporaries, and copies borrowed input before releasing its packet.
+MAC verification still precedes channel delivery. Separate directional states
+use the existing V library's streaming HMAC API, avoiding the one-shot API's
+payload-sized retained allocations in a `-gc none` worker. No cipher, protocol
+algorithm, key format, or authentication policy is replaced.
+
+The small kernel fix maps lwIP ERR_RST to ECONNREFUSED only while an active
+connect is pending. Established resets retain ECONNRESET. RFC 9293 section
+3.10.7.3 describes a reset but does not assign a numeric errno; Linux's
+connect(2) ABI specifies ECONNREFUSED when nobody listens. The regression tests
+the production error callback and SO_ERROR read/clear path separately from
+the real guest-loopback refusal and post-unlock-success probes.
+
+The callback's per-command budget is 900 seconds. `SSH_STAGE2_ONLY=1` avoids
+repeating the prior accepted shell/auth/session suite, without waiving transfer
+or refusal gates. Optional test-only `SSH_STAGE2_DIAGNOSTICS=1` samples process
+accounting to nonsecret COM1, and `SSH_STAGE2_PCAP=1` enables a QEMU packet dump.
+These are diagnostics, not production service settings or qualification passes.
+The Stage 2 report owns the final verdict and measured before/after results.

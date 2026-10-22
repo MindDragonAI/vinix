@@ -16,6 +16,8 @@ mut:
 	encrypted bool
 	rx_mac    []u8
 	tx_mac    []u8
+	rx_auth   &hmac.Hmac[&sha256.Digest] = unsafe { nil }
+	tx_auth   &hmac.Hmac[&sha256.Digest] = unsafe { nil }
 	rx_seq    u32
 	tx_seq    u32
 	received  u64
@@ -27,13 +29,20 @@ mut:
 fn (mut t Transport) read_exact(n int) ![]u8 {
 	if n < 0 || n > max_packet + 32 { return error('network read bound') }
 	mut data := []u8{len: n}
+	t.read_into(mut data) or {
+		unsafe { data.free() }
+		return err
+	}
+	return data
+}
+
+fn (mut t Transport) read_into(mut data []u8) ! {
 	mut pos := 0
-	for pos < n {
+	for pos < data.len {
 		count := t.socket.read(mut data[pos..])!
 		if count <= 0 { return error('connection closed') }
 		pos += count
 	}
-	return data
 }
 
 fn (mut t Transport) write_all(data []u8) ! {
@@ -43,6 +52,21 @@ fn (mut t Transport) write_all(data []u8) ! {
 		if count <= 0 { return error('connection closed') }
 		pos += count
 	}
+}
+
+// The streaming keyed API consumes input synchronously and reuses digests;
+// hmac.new retains payload-sized temporaries in a -gc none worker.
+fn (mut t Transport) packet_mac(receiving bool, plain []u8) []u8 {
+	if receiving && isnil(t.rx_auth) { t.rx_auth = hmac.new_hmac(sha256.new, t.rx_mac) }
+	if !receiving && isnil(t.tx_auth) { t.tx_auth = hmac.new_hmac(sha256.new, t.tx_mac) }
+	mut state := if receiving { t.rx_auth } else { t.tx_auth }
+	seq := if receiving { t.rx_seq } else { t.tx_seq }
+	prefix := [u8(seq >> 24), u8(seq >> 16), u8(seq >> 8), u8(seq)]!
+	state.write(unsafe { prefix[..] }) or { panic(err) }
+	state.write(plain) or { panic(err) }
+	mut digest := []u8{len: 32}
+	state.sum_into(mut digest)
+	return digest
 }
 
 // After CHANNEL_CLOSE, let the peer send its close/disconnect and TCP FIN.
@@ -72,14 +96,21 @@ fn (mut t Transport) send(payload []u8) ! {
 	mut pad := block - ((payload.len + 5) % block)
 	if pad < 4 { pad += block }
 	mut plain := []u8{cap: payload.len + pad + 5}
+	defer { unsafe { plain.free() } }
 	put_u32(mut plain, u32(payload.len + pad + 1))
 	plain << u8(pad)
 	plain << payload
-	plain << entropy(pad)!
-	mut wire := plain.clone()
+	padding := entropy(pad)!
+	defer { unsafe { padding.free() } }
+	plain << padding
+	mut wire := []u8{len: plain.len, cap: plain.len + 32}
+	defer { unsafe { wire.free() } }
+	copy(mut wire, plain)
 	if t.encrypted {
 		t.tx.xor_key_stream(mut wire, plain)
-		wire << mac(t.tx_mac, t.tx_seq, plain)
+		digest := t.packet_mac(false, plain)
+		defer { unsafe { digest.free() } }
+		wire << digest
 	}
 	t.write_all(wire)!
 	t.tx_seq++
@@ -89,21 +120,27 @@ fn (mut t Transport) send(payload []u8) ! {
 fn (mut t Transport) receive() ![]u8 {
 	t.limits()!
 	block := if t.encrypted { 16 } else { 8 }
-	first := t.read_exact(block)!
-	mut plain := first.clone()
-	if t.encrypted { t.rx.xor_key_stream(mut plain, first) }
-	mut r := Reader{ data: plain }
+	mut first := t.read_exact(block)!
+	defer { unsafe { first.free() } }
+	if t.encrypted { t.rx.xor_key_stream(mut first, first) }
+	mut r := Reader{ data: first }
 	n := r.uint()!
 	if n < 6 || n > max_packet || (n + 4) % u32(block) != 0 || n + 4 < u32(block) {
 		return error('invalid packet length')
 	}
-	rest := t.read_exact(int(n) + 4 - block)!
-	mut tail := rest.clone()
-	if t.encrypted { t.rx.xor_key_stream(mut tail, rest) }
-	plain << tail
+	// One owner for the authenticated plaintext. Tail is only a borrowed slice.
+	mut plain := []u8{len: int(n) + 4}
+	defer { unsafe { plain.free() } }
+	copy(mut plain, first)
+	mut tail := unsafe { plain[block..] }
+	t.read_into(mut tail)!
+	if t.encrypted { t.rx.xor_key_stream(mut tail, tail) }
 	if t.encrypted {
 		supplied := t.read_exact(32)!
-		if !hmac.equal(supplied, mac(t.rx_mac, t.rx_seq, plain)) {
+		defer { unsafe { supplied.free() } }
+		digest := t.packet_mac(true, plain)
+		defer { unsafe { digest.free() } }
+		if !hmac.equal(supplied, digest) {
 			return error('invalid packet MAC')
 		}
 	}
@@ -115,9 +152,15 @@ fn (mut t Transport) receive() ![]u8 {
 fn (mut t Transport) next() ![]u8 {
 	for _ in 0 .. 64 {
 		p := t.receive()!
-		if p[0] == 1 { return error('peer disconnected') }
-		if p[0] in [u8(2), 4] { continue }
-		if p[0] == 20 && t.encrypted { return error('rekey unsupported; reconnect') }
+		if p[0] == 1 {
+			unsafe { p.free() }
+			return error('peer disconnected')
+		}
+		if p[0] == 2 || p[0] == 4 { unsafe { p.free() }; continue }
+		if p[0] == 20 && t.encrypted {
+			unsafe { p.free() }
+			return error('rekey unsupported; reconnect')
+		}
 		return p
 	}
 	return error('too many ignored packets')

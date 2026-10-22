@@ -2,6 +2,28 @@ module main
 
 import os
 
+fn test_channel_input_copies_borrowed_packet_and_reuses_bounded_storage() {
+	mut c := Channel{ opened: true, started: true, pending: []u8{cap: channel_window} }
+	defer { unsafe { c.pending.free() } }
+	base := c.pending.data
+	mut transport := Transport{}
+	for _ in 0 .. 1000 {
+		mut packet := []u8{cap: 25}
+		packet << u8(94)
+		put_u32(mut packet, 0)
+		put_string(mut packet, 'abcdefghijklmnop'.bytes())
+		assert transport.handle_channel(mut c, Config{}, packet)!
+		unsafe { packet.free() }
+		assert c.pending.bytestr() == 'abcdefghijklmnop'
+		c.pending.delete_many(0, 5)
+		assert c.pending.bytestr() == 'fghijklmnop'
+		c.pending.delete_many(0, 11)
+		c.receive_window += 16
+		assert c.pending.len == 0 && c.pending.data == base
+		assert c.pending.cap == channel_window && c.receive_window == channel_window
+	}
+}
+
 fn test_pipe_exec_eof_drains_both_streams_and_reaps() {
 	mut child := pipe_child(['/bin/sh', '-c', 'cat; printf tail; printf diagnostic >&2; exit 7'],
 		['PATH=/usr/bin:/bin'], os.getwd()) or { panic(err) }

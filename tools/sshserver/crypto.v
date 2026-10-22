@@ -40,6 +40,7 @@ fn kdf(k []u8, h []u8, letter u8, session []u8, count int) []u8 {
 
 fn mac(key []u8, seq u32, plain []u8) []u8 {
 	mut input := []u8{cap: plain.len + 4}
+	defer { unsafe { input.free() } }
 	put_u32(mut input, seq)
 	input << plain
 	return hmac.new(key, input, sha256.sum, 64)

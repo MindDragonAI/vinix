@@ -30,7 +30,8 @@ mut:
 }
 
 fn channel_message(id u8, remote u32) []u8 {
-	mut p := [id]
+	mut p := []u8{cap: 32}
+	p << id
 	put_u32(mut p, remote)
 	return p
 }
@@ -110,7 +111,7 @@ fn (mut t Transport) handle_channel(mut c Channel, config Config, packet []u8) !
 			c.window += increment
 		}
 		94 {
-			data := r.string_bytes(channel_packet)!
+			data := r.string_view(channel_packet)!
 			r.end()!
 			if !c.started || c.eof || data.len > int(c.receive_window) || c.pending.len + data.len > channel_window {
 				return error('channel input window violation')
@@ -221,8 +222,11 @@ fn (mut t Transport) handle_channel(mut c Channel, config Config, packet []u8) !
 }
 
 fn (mut t Transport) session_loop(config Config) ! {
-	mut c := Channel{}
+	mut c := Channel{ pending: []u8{cap: channel_window} }
+	defer { unsafe { c.pending.free() } }
 	defer { c.child.cleanup() }
+	mut buffer := []u8{len: channel_packet}
+	defer { unsafe { buffer.free() } }
 	for {
 		t.limits()!
 		c.child.reap()
@@ -248,21 +252,29 @@ fn (mut t Transport) session_loop(config Config) ! {
 				c.child.input
 			} else {
 				-1
-			}, events: C.POLLOUT }]
+			}, events: C.POLLOUT }]!
 		n := unsafe { C.poll(&fds[0], usize(fds.len), 100) }
 		if n < 0 {
 			if C.errno == C.EINTR { continue }
 			return error('poll failed')
 		}
 		if fds[0].revents & (C.POLLIN | C.POLLHUP | C.POLLERR) != 0 {
-			if !t.handle_channel(mut c, config, t.next()!)! { return }
+			packet := t.next()!
+			keep := t.handle_channel(mut c, config, packet) or {
+				unsafe { packet.free() }
+				return err
+			}
+			unsafe { packet.free() }
+			if !keep { return }
 		}
 		if c.pending.len > 0 && fds[3].revents & C.POLLOUT != 0 {
 			sent := C.write(c.child.input, c.pending.data, usize(c.pending.len))
 			if sent > 0 {
-				c.pending = c.pending[int(sent)..].clone()
+				// delete_many compacts in place and retains the bounded allocation.
+				c.pending.delete_many(0, int(sent))
 				c.receive_window += u32(sent)
 				mut adjust := channel_message(93, c.remote)
+				defer { unsafe { adjust.free() } }
 				put_u32(mut adjust, u32(sent))
 				t.send(adjust)!
 			} else if sent < 0 && C.errno !in [C.EAGAIN, C.EINTR] {
@@ -278,9 +290,10 @@ fn (mut t Transport) session_loop(config Config) ! {
 		// An EPIPE must not throw away already-buffered child output or exit status.
 		if c.input_closed && c.pending.len > 0 {
 			credit := u32(c.pending.len)
-			c.pending = []u8{}
+			c.pending.clear()
 			c.receive_window += credit
 			mut adjust := channel_message(93, c.remote)
+			defer { unsafe { adjust.free() } }
 			put_u32(mut adjust, credit)
 			t.send(adjust)!
 		}
@@ -301,16 +314,19 @@ fn (mut t Transport) session_loop(config Config) ! {
 				c.input_closed = true
 			}
 		}
-		for index in [1, 2] {
+		for index in [1, 2]! {
 			fd := if index == 1 { c.child.output } else { c.child.errors }
 			if fd < 0 || c.window == 0 || fds[index].revents & (C.POLLIN | C.POLLHUP | C.POLLERR) == 0 {
 				continue
 			}
 			size := int(math.min(u32(channel_packet), math.min(c.window, c.packet)))
-			mut buffer := []u8{len: size}
 			got := C.read(fd, buffer.data, usize(size))
 			if got > 0 {
-				mut p := channel_message(if index == 1 { u8(94) } else { u8(95) }, c.remote)
+				// Reserve header + payload up front: no abandoned growth buffers.
+				mut p := []u8{cap: int(got) + 13}
+				defer { unsafe { p.free() } }
+				p << if index == 1 { u8(94) } else { u8(95) }
+				put_u32(mut p, c.remote)
 				if index == 2 { put_u32(mut p, 1) }
 				put_string(mut p, buffer[..int(got)])
 				t.send(p)!

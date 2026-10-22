@@ -197,14 +197,21 @@ fn (mut c Child) cleanup() {
 fn read_exact_fd(fd int, n int) ![]u8 {
 	if n < 0 || n > max_packet { return error('read bound') }
 	mut data := []u8{len: n}
+	read_into_fd(fd, mut data) or {
+		unsafe { data.free() }
+		return err
+	}
+	return data
+}
+
+fn read_into_fd(fd int, mut data []u8) ! {
 	mut pos := 0
-	for pos < n {
-		count := unsafe { C.read(fd, &data[pos], usize(n - pos)) }
+	for pos < data.len {
+		count := unsafe { C.read(fd, &data[pos], usize(data.len - pos)) }
 		if count < 0 && C.errno == C.EINTR { continue }
 		if count <= 0 { return error('short read') }
 		pos += int(count)
 	}
-	return data
 }
 
 fn write_fd(fd int, data []u8) ! {

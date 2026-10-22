@@ -301,9 +301,12 @@ fn receive_file(fd int, record ScpRecord, stamp ScpTime) ! {
 	}
 	scp_ok()!
 	mut remaining := record.size
+	mut buffer := []u8{len: 32768}
+	defer { unsafe { buffer.free() } }
 	for remaining > 0 {
 		size := int(math.min(remaining, u64(32768)))
-		data := read_exact_fd(0, size)!
+		mut data := unsafe { buffer[..size] }
+		read_into_fd(0, mut data)!
 		write_fd(fd, data)!
 		remaining -= u64(size)
 	}
@@ -365,9 +368,13 @@ fn scp_send_entry(parent int, name string, recursive bool, depth int) ! {
 	write_fd(1, 'C${mode:04o} ${s.st_size} ${name}\n'.bytes())!
 	scp_ack()!
 	mut remaining := u64(s.st_size)
+	mut buffer := []u8{len: 32768}
+	defer { unsafe { buffer.free() } }
 	for remaining > 0 {
 		size := int(math.min(remaining, u64(32768)))
-		write_fd(1, read_exact_fd(fd, size)!)!
+		mut data := unsafe { buffer[..size] }
+		read_into_fd(fd, mut data)!
+		write_fd(1, data)!
 		remaining -= u64(size)
 	}
 	scp_ok()!

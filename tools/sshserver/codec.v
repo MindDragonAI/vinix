@@ -27,12 +27,17 @@ fn (mut r Reader) uint() !u32 {
 }
 
 fn (mut r Reader) string_bytes(limit int) ![]u8 {
+	return r.string_view(limit)!.clone()
+}
+
+// Borrowed until the packet owner frees it; consumers must copy before retaining.
+fn (mut r Reader) string_view(limit int) ![]u8 {
 	if limit < 0 { return error('invalid string limit') }
 	n := r.uint()!
 	if n > u32(limit) || n > u32(r.data.len - r.pos) { return error('invalid string length') }
 	p := r.pos
 	r.pos += int(n)
-	return r.data[p..r.pos].clone()
+	return unsafe { r.data[p..r.pos] }
 }
 
 fn (r Reader) end() ! {
