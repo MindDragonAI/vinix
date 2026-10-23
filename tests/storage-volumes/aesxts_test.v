@@ -9,6 +9,39 @@ fn decode_fixed(text string, output &u8, count int) {
 	unsafe { for i in 0 .. count { output[i] = bytes[i] } }
 }
 
+fn test_linear_square_and_short_inverse_chain_all_sbox_inputs() {
+	mut wiped := [17]u64{init: 0x915a23b4c67d8e0f}
+	erase_lanes(&wiped[1], 15)
+	assert wiped[0] == 0x915a23b4c67d8e0f && wiped[16] == 0x915a23b4c67d8e0f
+	for i in 1 .. 16 { assert wiped[i] == 0 }
+	// Exercise all 64 bit lanes, including independent upper lanes. The
+	// multiplication oracle also checks the linear reduction polynomial.
+	mut lanes := [8]u64{}; mut squared := [8]u64{}; mut expected := [8]u64{}
+	mut seed := u64(0x123456789abcdef0)
+	for _ in 0 .. 256 {
+		for i in 0 .. 8 { seed = seed * 6364136223846793005 + 1442695040888963407; lanes[i] = seed }
+		square_lanes(&lanes[0], &squared[0])
+		multiply_lanes(&lanes[0], &lanes[0], &expected[0])
+		assert squared == expected
+	}
+	for base in 0 .. 16 {
+		mut state := [16]u8{}
+		for i in 0 .. 16 { state[i] = u8(base * 16 + i) }
+		original := state
+		mut states := [4][16]u8{}
+		for index in 0 .. 4 { for i in 0 .. 16 { states[index][i] = u8((base * 16 + i + index * 71) & 255) } }
+		original_states := states
+		sub_bytes_quad(mut states, false)
+		for index in 0 .. 4 { for i in 0 .. 16 { assert states[index][i] == substitute(original_states[index][i]) } }
+		sub_bytes_quad(mut states, true)
+		assert states == original_states
+		sub_bytes(mut state, false)
+		for i in 0 .. 16 { assert state[i] == substitute(original[i]) }
+		sub_bytes(mut state, true)
+		assert state == original
+	}
+}
+
 fn test_aes256_fips197_block_and_complete_nist_xts_prefixes_in_both_directions() {
 	mut key := [32]u8{}; for i in 0 .. 32 { key[i] = u8(i) }; mut schedule := [240]u8{}; expand(&key[0], &schedule[0])
 	mut plain := [16]u8{}; decode_fixed('00112233445566778899aabbccddeeff', &plain[0], 16)
@@ -32,7 +65,7 @@ fn test_aes256_fips197_block_and_complete_nist_xts_prefixes_in_both_directions()
 
 // Independent table-based library AES plus a scalar polynomial tweak oracle.
 fn oracle(key []u8, data []u8, sector int, first u64, decrypt bool) []u8 {
-	data_cipher := aes.new_cipher(key[..32]); tweak_cipher := aes.new_cipher(key[32..])
+	data_cipher := aes.new_cipher(key[..32]) or { panic(err) }; tweak_cipher := aes.new_cipher(key[32..]) or { panic(err) }
 	mut result := data.clone()
 	for at := 0; at < data.len; at += sector {
 		mut number := []u8{len: 16}; unit := first + u64(at / sector)
