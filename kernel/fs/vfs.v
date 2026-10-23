@@ -175,6 +175,7 @@ pub fn initialise() {
 	filesystems['cgroup2'] = &CGroupFS{}
 	filesystems['9p'] = &NinePFS{}
 	filesystems['smb2'] = &SMB2FS{}
+	filesystems['nfs'] = &NFSFS{}
 	init_mount_tables()
 }
 
