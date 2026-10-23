@@ -1,17 +1,38 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
+// vtest vflags: -gc none -manualfree -d track_heap
 module sessiondaemon
 
 import desktop.sessionipc
 
-#include "@VMODROOT/tools/tests/heap_tracker.h"
+$if track_heap ? {
+	#include "@VMODROOT/tools/tests/heap_tracker.h"
+} $else {
+	$compile_error('poll_memory_test requires -d track_heap -gc none -manualfree')
+}
 
 fn C.vinix_heap_begin()
 fn C.vinix_heap_end() u64
+fn C.vinix_heap_count() u32
+fn C.vinix_heap_size_at(u32) u64
 fn C.socketpair(i32, i32, i32, &i32) i32
 fn C.dup(i32) i32
 fn C.dup2(i32, i32) i32
 
 fn broker_poll_kept(_ string) u64 { return C.vinix_heap_end() }
+
+fn test_heap_tracker_observes_live_allocations_and_frees() {
+	C.vinix_heap_begin()
+	pointer := unsafe { malloc(37) }
+	assert C.vinix_heap_end() == 37
+	unsafe { free(pointer) }
+	C.vinix_heap_begin()
+	other := unsafe { malloc(37) }
+	assert C.vinix_heap_count() == 1
+	assert C.vinix_heap_size_at(0) == 37
+	unsafe { free(other) }
+	assert C.vinix_heap_count() == 0
+	assert C.vinix_heap_end() == 0
+}
 
 fn test_broker_denied_socket_requests_and_logging_keep_no_allocations() {
 	mut daemon := &SessionDaemon{}

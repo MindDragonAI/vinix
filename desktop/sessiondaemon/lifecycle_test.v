@@ -7,19 +7,61 @@ import desktop.sessioncore
 import desktop.sessionipc
 import os
 import time
+import crypto.rand
 
-fn session_test_wait() {
+fn session_test_base(label string) string {
+	// Unix socket names have a fixed ABI limit, independent of TMPDIR. Keep
+	// these private, exclusively created directories short even with a deep
+	// compiler scratch directory (as in the host recheck harness).
+	suffix := rand.bytes(8) or { panic(err) }
+	return '/tmp/vsl-${C.getpid()}-${label}-' + suffix.hex()
+}
+
+fn test_lifecycle_socket_path_contract_with_deep_tmpdir() {
+	// Exact parent recheck scratch root and a representative receipt PID.
+	deep := '/home/agent/build/vinix-m17c-hrx/build/m17c-hrx/tmp'
+	for label in ['vinix-compositor-capability', 'vinix-session-test', 'vinix-service-test'] {
+		old := '${deep}/${label}-3361815/vinix-session.1001/broker'
+		assert sessionipc.session_address(old) == none, '${old.len}: ${old}'
+	}
+	for label in ['cap', 'state', 'services'] {
+		path := '${session_test_base(label)}/vinix-session.${C.getuid()}/broker'
+		assert sessionipc.session_address(path) != none
+	}
+}
+
+fn session_test_wait(pid int) (bool, bool) {
 	for _ in 0 .. 100 {
-		if sessionipc.session_call_ok('ping', []) { return }
+		if sessionipc.session_call_ok('ping', []) { return true, false }
+		mut status := 0
+		if C.waitpid(pid, &status, C.WNOHANG) == pid {
+			eprintln('session broker child ${pid} exited before readiness: wait status=${status}')
+			return false, true
+		}
 		time.sleep(20 * time.millisecond)
 	}
-	assert false, 'session broker did not become ready'
+	return false, false
 }
 
 fn session_test_start(home string) int {
 	assert !sessionipc.session_has_control()
+	for name in ['vinix-session', 'vinix-service-runner'] {
+		path := sessionipc.helper_path(name)
+		assert os.is_executable(path), 'missing native helper ${path}; run desktop/tools/build-services.v --arch=native --output=DIR and set VINIX_SESSION_BIN_DIR=DIR'
+		unsafe { path.free() }
+	}
+	directory := sessionipc.session_runtime_directory()
+	path := '${directory}/broker'
+	defer { unsafe { directory.free() path.free() } }
+	assert sessionipc.session_address(path) != none, 'broker socket path exceeds ABI limit: ${path}'
+	// Keep child stdout/stderr inherited, including startup failures.
 	pid := sessionipc.session_start_broker(home) or { panic('cannot start session broker') }
-	session_test_wait()
+	ready, exited := session_test_wait(pid)
+	if !ready {
+		if !exited { session_test_kill(pid) }
+		sessionipc.session_close_control()
+	}
+	assert ready, 'session broker did not become ready: ${path}'
 	return pid
 }
 
@@ -48,7 +90,7 @@ fn session_test_wait_exit(pid int) int {
 }
 
 fn test_only_inherited_connection_grants_compositor_authority() {
-	base := '${os.temp_dir()}/vinix-compositor-capability-${C.getpid()}'
+	base := session_test_base('cap')
 	os.mkdir(base, mode: 0o700)!
 	os.setenv('VINIX_SESSION_RUNTIME', base, true)
 	defer {
@@ -122,14 +164,13 @@ fn test_only_inherited_connection_grants_compositor_authority() {
 }
 
 fn test_broker_credentials_durable_alarms_dialogs_exchange_and_shutdown() {
-	base := '${os.temp_dir()}/vinix-session-test-${C.getpid()}'
-	os.mkdir(base) or { panic(err) }
-	os.chmod(base, 0o700) or { panic(err) }
+	base := session_test_base('state')
+	os.mkdir(base, mode: 0o700) or { panic(err) }
 	defer { os.rmdir_all(base) or {} }
 	os.setenv('VINIX_SESSION_RUNTIME', base, true)
 	home := '${base}/home'
 	os.mkdir(home) or { panic(err) }
-	binary := os.real_path('build/session-runtime/vinix-session')
+	binary := sessionipc.helper_path('vinix-session')
 	assert os.is_file(binary)
 	mut broker := session_test_start(home)
 	defer {
@@ -236,9 +277,8 @@ fn test_broker_credentials_durable_alarms_dialogs_exchange_and_shutdown() {
 }
 
 fn test_real_service_groups_restart_dependencies_and_broker_crash_cleanup() {
-	base := '${os.temp_dir()}/vinix-service-test-${C.getpid()}'
-	os.mkdir(base) or { panic(err) }
-	os.chmod(base, 0o700) or { panic(err) }
+	base := session_test_base('services')
+	os.mkdir(base, mode: 0o700) or { panic(err) }
 	defer {
 		os.rmdir_all(base) or {}
 		unsafe { base.free() }
@@ -255,8 +295,6 @@ fn test_real_service_groups_restart_dependencies_and_broker_crash_cleanup() {
 	config := s.encode()
 	defer { unsafe { config.free() } }
 	sessioncore.save('${base}/.vinix-services', config) or { panic(err) }
-	binary := os.real_path('build/session-runtime/vinix-session')
-	defer { unsafe { binary.free() } }
 	mut broker := session_test_start(base)
 	defer {
 		if broker > 0 { session_test_kill(broker) }
