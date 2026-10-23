@@ -1,0 +1,47 @@
+module fs
+
+import fs.nfs
+import memory
+import memory.mmap
+import errno
+import stat
+
+fn network_mmap_regressions() {
+	mut rig := &ContractWire{file_size: 4096 + 29}
+	mut backend := &NFSFS{mounted: true}
+	backend.client = nfs.Client{context: rig, transfer: nfs_contract_transfer, tx: unsafe { &rig.tx[0] }, rx: unsafe { &rig.rx[0] }, rsize: 257}
+	mut h := nfs.FileHandle{len: 1}
+	h.bytes[0] = 42
+	mut r := &NfsResource{backend: backend, handle: h}
+	for kind in u32(1) .. 8 {
+		r.set_stat(nfs.Attr{kind: kind})
+		assert r.can_mmap == (kind == 1)
+	}
+	r.set_stat(nfs.Attr{kind: 1})
+	baseline := memory.live_pages()
+	for page in [u64(0), 1, 2] {
+		physical := r.mmap(unsafe { nil }, page, mmap.map_private)
+		assert physical != unsafe { nil }
+		for i in 0 .. 4096 {
+			at := page * 4096 + u64(i)
+			assert unsafe { &u8(physical)[i] } == if at < rig.file_size { u8(at % 251) } else { u8(0) }
+		}
+		r.release_mapping(unsafe { nil }, page, physical, mmap.map_private)
+		assert memory.live_pages() == baseline
+	}
+	assert rig.reads == 17 && r.can_mmap && stat.isreg(r.stat.mode)
+	rig.short_bytes = 17
+	short_page := r.mmap(unsafe { nil }, 0, mmap.map_private)
+	assert short_page != unsafe { nil }
+	for i in 0 .. 4096 { assert unsafe { &u8(short_page)[i] } == u8(i % 251) }
+	r.release_mapping(unsafe { nil }, 0, short_page, mmap.map_private)
+	assert memory.live_pages() == baseline
+	rig.short_bytes = 0
+	rig.reads = 0; rig.read_failure = 2
+	assert r.mmap(unsafe { nil }, 0, mmap.map_private) == unsafe { nil }
+	assert errno.get() == errno.eio && memory.live_pages() == baseline
+	assert !r.retain_mapping_range(unsafe { nil }, 0, 4096, mmap.map_shared)
+	assert errno.get() == errno.enotsup
+	assert !backend.lock.held
+	println('NETWORK-MMAP-PASS NFS production facade/client: real bytes; offsets; bounded reads; regular-only; error cleanup')
+}

@@ -1,4 +1,20 @@
+@[has_globals]
 module memory
+fn C.memset(voidptr, int, usize) voidptr
+__global pages int
+pub fn live_pages() int { return pages }
+pub fn pmm_alloc_user(n u64) voidptr {
+	assert n == 1
+	p := unsafe { malloc(4096) }
+	C.memset(p, 0, 4096)
+	pages++
+	return p
+}
+pub fn pmm_free(p voidptr, n u64) {
+	assert n == 1 && p != unsafe { nil } && pages > 0
+	pages--
+	C.free(p)
+}
 fn C.free(voidptr)
 fn C.vheap_free(voidptr)
 pub fn malloc_packed_fallible(n u64) voidptr { return unsafe { malloc(int(n)) } }

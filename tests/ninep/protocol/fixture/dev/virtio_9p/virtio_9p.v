@@ -35,7 +35,25 @@ __global (
 	calls            int
 	closes           int
 	setattr_mask     u32
+	read_unit        u32
+	read_calls       int
+	read_failure     int
+	read_short       int
+	read_offset      u64
+	positive_short   bool
 )
+
+pub fn mmap_short_chunks(enabled bool) { positive_short = enabled }
+
+pub fn mmap_reads(unit u32, failure int, short int) {
+	read_unit = unit
+	read_calls = 0
+	read_failure = failure
+	read_short = short
+}
+
+pub fn read_count() int { return read_calls }
+pub fn last_read_offset() u64 { return read_offset }
 
 pub fn connect(tag string) ?&Channel {
 	if connected || tag != 'share' { return none }
@@ -167,7 +185,7 @@ pub fn exchange(_ voidptr, request &u8, length u32, response &u8, capacity u32) 
 			fid := r.dword()
 			assert fids[fid] != 0
 			qid(mut w, fids[fid])
-			w.dword(0)
+			w.dword(read_unit)
 		}
 		ninep.tclunk {
 			fid := r.dword()
@@ -179,10 +197,22 @@ pub fn exchange(_ voidptr, request &u8, length u32, response &u8, capacity u32) 
 			offset := r.qword()
 			count := r.dword()
 			id := fids[fid]
+			read_calls++
+			read_offset = offset
+			if read_unit != 0 { assert count <= read_unit }
+			if read_calls == read_failure {
+				mut failure := ninep.writer(response, capacity, 7, tag) // Rlerror
+				failure.dword(5)
+				return int(failure.finish())
+			}
 			n := if offset >= objects[id].size {
+				u32(0)
+			} else if read_calls == read_short {
 				u32(0)
 			} else if objects[id].size - offset < count {
 				u32(objects[id].size - offset)
+			} else if positive_short && count > 1 {
+				count / 2
 			} else {
 				count
 			}

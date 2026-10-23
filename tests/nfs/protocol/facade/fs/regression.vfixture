@@ -19,6 +19,10 @@ mut:
 	fail_transport bool
 	renamed bool
 	list_parent u8 = 1
+	file_size u64 = 42
+	reads int
+	read_failure int
+	short_bytes u32
 }
 
 fn nfs_contract_transfer(context voidptr, p &u8, count int, sending bool) bool {
@@ -35,19 +39,35 @@ fn nfs_contract_transfer(context voidptr, p &u8, count int, sending bool) bool {
 		req.u32(); credential_size := int(req.u32()); req.take(credential_size)
 		req.u32(); verifier_size := int(req.u32()); req.take(verifier_size)
 		mut requested := nfs.FileHandle{}
-		if rig.procedure in [u32(12), 13, 14, 17] { req.handle(unsafe { &requested }) }
+		if rig.procedure in [u32(6), 12, 13, 14, 17] { req.handle(unsafe { &requested }) }
 		mut w := nfs.Xdr{p: unsafe { &rig.reply[0] }, n: 1024}
 		w.put32(0); w.put32(xid); w.put32(1); w.put32(0); w.put32(0); w.put32(0); w.put32(0)
 		match rig.procedure {
 			1 {
 				w.put32(0)
 				w.put32(rig.kind); w.put32(0o666); w.put32(1); w.put32(0); w.put32(0)
-				w.put64(42); w.put64(512); w.put32(0); w.put32(0)
+				w.put64(rig.file_size); w.put64(512); w.put32(0); w.put32(0)
 				w.put64(7); w.put64(9)
 				for _ in 0 .. 3 { w.put32(1); w.put32(0) }
 			}
 			4 { // Linux RO export: no MODIFY/EXTEND advisory grant.
 				w.put32(0); w.put32(0); w.put32(1)
+			}
+			6 {
+				offset := req.u64()
+				requested_count := req.u32()
+				assert requested_count > 0 && requested_count <= 257
+				rig.reads++
+				if rig.reads == rig.read_failure { w.put32(5); w.put32(0) }
+				else {
+					limit := if rig.short_bytes > 0 && rig.short_bytes < requested_count { rig.short_bytes } else { requested_count }
+					n := if offset >= rig.file_size { u32(0) } else if rig.file_size - offset < limit { u32(rig.file_size - offset) } else { limit }
+					mut bytes := [257]u8{}
+					for i in 0 .. int(n) { bytes[i] = u8((offset + u64(i)) % 251) }
+					w.put32(0); w.put32(0); w.put32(n)
+					w.put32(u32(offset + n >= rig.file_size))
+					w.put_opaque(unsafe { &bytes[0] }, int(n), 257)
+				}
 			}
 			7 { w.put32(30); w.put32(0); w.put32(0) }
 			12, 13 {
@@ -97,6 +117,7 @@ fn nfs_contract_transfer(context voidptr, p &u8, count int, sending bool) bool {
 }
 
 pub fn contract_tests() {
+	network_mmap_regressions()
 	cleanup_regression()
 	rename_regressions()
 	statfs_regressions()

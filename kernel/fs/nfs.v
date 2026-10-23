@@ -257,7 +257,8 @@ fn (mut b NFSFS) mount_specifier(parent &VFSNode, name string, source string, fl
 
 fn (mut r NfsResource) set_stat(a nfs.Attr) {
 	r.stat.dev = r.backend.dev; r.stat.ino = a.fileid
-	r.stat.mode = u32(if a.kind == 2 { stat.ifdir } else { stat.ifreg }) | (a.mode & 0o7777)
+	r.stat.mode = u32(if a.kind == 2 { stat.ifdir } else if a.kind == 1 { stat.ifreg } else { 0 }) | (a.mode & 0o7777)
+	r.can_mmap = stat.isreg(r.stat.mode)
 	r.stat.uid = a.uid; r.stat.gid = a.gid; r.stat.nlink = a.nlink
 	r.stat.size = i64(a.size); r.stat.blocks = i64(a.used / 512 + u64(a.used % 512 != 0)); r.stat.blksize = 4096
 	r.stat.atim = time.TimeSpec{i64(a.atime.sec), i64(a.atime.nsec)}
@@ -459,15 +460,21 @@ fn (r &NfsResource) read_only_backend() bool { return r.backend.client.ro }
 fn (mut r NfsResource) read(_ voidptr, buf voidptr, offset u64, count u64) ?i64 {
 	mut b := r.backend
 	b.lock.acquire(); defer { b.lock.release() }
+	return r.read_locked(buf, offset, count, false)
+}
+
+fn (mut r NfsResource) read_locked(buf voidptr, offset u64, count u64, strict bool) ?i64 {
+	mut b := r.backend
 	if !b.usable() { return none }
 	if !stat.isreg(r.stat.mode) { errno.set(errno.eisdir); return none }
 	if count > u64(0x7fffffff) || offset > u64(0x7fffffffffffffff) - count { errno.set(errno.einval); return none }
 	r.refresh_attr()?
+	if b.client.rsize <= 0 || b.client.rsize > nfs.io_max { errno.set(errno.eio); return none }
 	mut done := u64(0)
 	for done < count {
 		n := int(if count-done < u64(b.client.rsize) { count-done } else { u64(b.client.rsize) })
-		got := b.client.read(unsafe { &r.handle }, offset+done, unsafe { &u8(buf) + done }, n) or { b.failure(); if done > 0 { return i64(done) }; return none }
-		done += u64(got); if got < n { break }
+		got := b.client.read(unsafe { &r.handle }, offset+done, unsafe { &u8(buf) + done }, n) or { b.failure(); if done > 0 && !strict { return i64(done) }; return none }
+		done += u64(got); if got < n && (!strict || got == 0) { break }
 	}
 	return i64(done)
 }
@@ -550,7 +557,28 @@ fn (mut r NfsResource) try_filesystem_stat() ?resource.FileSystemStat {
 fn (mut r NfsResource) sync(_ voidptr) ? { if r.backend.client.dead { r.backend.failure(); return none } }
 fn (mut r NfsResource) link(_ voidptr) ? { errno.set(errno.eopnotsupp); return none }
 fn (mut r NfsResource) ioctl(handle voidptr, request u64, arg voidptr) ?int { return resource.default_ioctl(handle, request, arg) }
-fn (mut r NfsResource) mmap(_ voidptr, _ u64, _ int) voidptr { return unsafe { nil } }
+fn (mut r NfsResource) mmap(_ voidptr, page u64, flags int) voidptr {
+	r.backend.lock.acquire(); defer { r.backend.lock.release() }
+	if !r.backend.usable() { return unsafe { nil } }
+	r.refresh_attr() or { return unsafe { nil } }
+	frame := network_mmap_page(r.stat.mode, r.stat.size, page, flags) or { return unsafe { nil } }
+	if frame.count == 0 { return frame.physical }
+	got := r.read_locked(voidptr(u64(frame.physical) + higher_half), frame.offset, frame.count, true) or {
+		memory.pmm_free(frame.physical, 1)
+		return unsafe { nil }
+	}
+	return frame.complete(got)
+}
+
+fn (mut r NfsResource) retain_mapping_range(_ voidptr, _ u64, _ u64, flags int) bool {
+	return network_mmap_allowed(r.stat.mode, flags)
+}
+
+fn (mut r NfsResource) release_mapping_range(_ voidptr, _ u64, _ u64, _ int) {}
+
+fn (mut r NfsResource) release_mapping(_ voidptr, _ u64, physical voidptr, _ int) {
+	memory.pmm_free(physical, 1)
+}
 
 // Boot-lifetime storage: reference changes never free boxes, nodes, or slots.
 fn (mut r NfsResource) unref(_ voidptr) ? { katomic.dec(mut &r.refcount) }

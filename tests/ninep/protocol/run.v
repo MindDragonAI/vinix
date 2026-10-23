@@ -65,15 +65,31 @@ fn main() {
 	os.mkdir_all(work + '/facade/stat')!
 	os.cp(root + '/kernel/stat/stat.v', work + '/facade/stat/stat.v')!
 	os.cp(root + '/kernel/fs/ninep.v', work + '/facade/fs/ninep.v')!
+	os.cp(root + '/kernel/fs/network_mmap.v', work + '/facade/fs/network_mmap.v')!
 	os.cp(root + '/tests/ninep/protocol/facade_test.v', work + '/facade/fs/facade_test.v')!
+	os.cp(root + '/tests/network-mmap/ninep_test.v', work + '/facade/fs/network_mmap_test.v')!
+	cache := os.read_file(root + '/kernel/resource/cache.v')!
+	release_interface := 'pub interface MappingReleaseResource {' + cache.all_after('pub interface MappingReleaseResource {').all_before('\n}') + '\n}\n'
+	lifetime := 'pub interface MappingLifetimeResource {' + cache.all_after('pub interface MappingLifetimeResource {').all_before('\npub struct FileSystemStat')
+	release_dispatch := 'pub fn release_mapping(' + cache.all_after('pub fn release_mapping(').all_before('\n// Mappings created directly')
+	os.write_file(work + '/facade/resource/mapping.v', 'module resource\nimport errno\n' + release_interface + lifetime + release_dispatch)!
 	run(compiler, ['-nocache', '-cc', 'clang', '-enable-globals', 'test', work + '/facade/fs'])
 	run(compiler, ['-nocache', '-cc', 'clang', '-enable-globals', '-gc', 'none', '-manualfree',
 		'-o', work + '/facade.c', work + '/facade/fs/facade_test.v'])
 	audit_no_allocations(work + '/facade.c', ['ninep_resource', 'NinePResource_refresh_locked',
-		'NinePResource_read', 'NinePResource_write_locked', 'NinePResource_write', 'NinePResource_grow',
+		'NinePResource_read', 'NinePResource_read_locked',
+		'NinePResource_write_locked', 'NinePResource_write', 'NinePResource_grow',
 		'NinePResource_persist_metadata', 'NinePResource_open', 'NinePResource_snapshot_permissions',
 		'Client_read', 'Client_write', 'Client_call', 'Client_walk', 'Client_clunk', 'Client_getattr',
 		'parse_attr', 'next_entry', 'parse_options'])
+	run(compiler, ['-nocache', '-cc', 'clang', '-enable-globals', '-gc', 'none', '-manualfree',
+		'-o', work + '/mmap.c', work + '/facade/fs/network_mmap_test.v'])
+	audit_no_allocations(work + '/mmap.c', ['NinePResource_mmap', 'NinePResource_read_locked',
+		'NinePResource_release_mapping', 'network_mmap_page', 'NetworkMmapPage_complete',
+		'resource_release_mapping', 'resource_retain_mapping_range'])
+	run(compiler, ['-nocache', '-cc', 'clang', '-enable-globals', '-o', work + '/mmap-check', work + '/facade/fs/network_mmap_test.v'])
+	run(work + '/mmap-check', [])
+	println('NETWORK-MMAP-ALLOC-PASS 7 9P/page-fill/Resource-dispatch generated C bodies contain no hidden allocations')
 	os.mkdir_all(work + '/transport')!
 	os.cp_all(root + '/tests/ninep/protocol/transport_fixture', work + '/transport', false)!
 	// The host fixture owns real virtual memory, but its emulated device must

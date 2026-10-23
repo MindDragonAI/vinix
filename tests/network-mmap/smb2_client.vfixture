@@ -1,0 +1,56 @@
+module smb2
+
+import errno
+import klock
+
+pub const max_path = 1024
+pub const io_size = 32768
+
+pub struct FileId {}
+pub struct Attr {
+pub mut:
+	ino u64 = 9
+	size u64 = 4125
+	allocation u64 = 8192
+	attributes u32
+	accessed u64
+	written u64
+	changed u64
+}
+pub struct Client {
+pub mut:
+	max_read u32 = 257
+	readonly bool
+	fault int
+	lock &klock.Lock = unsafe { nil }
+	attr Attr
+	reads int
+	fail_read int
+	short_read int
+	positive_short bool
+	handles int
+}
+
+pub fn (mut c Client) create(_ string, _ u32, _ u32, _ bool) ?FileId {
+	assert c.lock.held
+	c.handles++
+	return FileId{}
+}
+pub fn (mut c Client) query_info(_ FileId, attr &Attr) ? {
+	assert c.lock.held
+	unsafe { *attr = c.attr }
+}
+pub fn (mut c Client) close(_ FileId) ? {
+	assert c.lock.held && c.handles > 0
+	c.handles--
+}
+pub fn (mut c Client) read(_ FileId, offset u64, out &u8, count int) ?int {
+	assert c.lock.held && count > 0 && count <= int(c.max_read)
+	c.reads++
+	if c.reads == c.fail_read { c.fault = 5; errno.set(errno.eio); return none }
+	if c.reads == c.short_read { return 0 }
+	limit := if c.positive_short && count > 1 { count / 2 } else { count }
+	n := if offset >= c.attr.size { 0 } else if c.attr.size - offset < u64(limit) { int(c.attr.size - offset) } else { limit }
+	for i in 0 .. n { unsafe { out[i] = u8((offset + u64(i)) % 251) } }
+	return n
+}

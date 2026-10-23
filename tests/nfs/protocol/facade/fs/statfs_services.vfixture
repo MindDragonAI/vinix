@@ -6,7 +6,7 @@ import klock
 import event.eventstruct
 
 #flag -Dvinix_stack_alloc=__builtin_alloca
-fn C.vinix_stack_alloc(u64) voidptr
+fn C.vinix_stack_alloc(usize) voidptr
 
 pub const at_fdcwd = -100
 pub const ms_nosuid = u64(2)

@@ -13,6 +13,8 @@ fn facade_check(root string, work string, v string) ! {
 	}
 	for path in os.walk_ext(root + '/kernel/fs/nfs', '.v') { os.cp(path, work + '/fs/nfs/' + os.file_name(path))! }
 	os.cp(root + '/kernel/fs/nfs.v', work + '/fs/nfs.v')!
+	os.cp(root + '/kernel/fs/network_mmap.v', work + '/fs/network_mmap.v')!
+	os.cp(root + '/tests/network-mmap/nfs.vfixture', work + '/fs/network_mmap_checks.v')!
 	os.cp(root + '/kernel/fs/rename_publication.v', work + '/fs/rename_publication.v')!
 	storage := os.read_file(root + '/kernel/fs/overlay_storage.v')!
 	// Normalize only the named multiline interface declaration for the host
@@ -28,7 +30,7 @@ fn facade_check(root string, work string, v string) ! {
 	r_cache := os.read_file(root + '/kernel/resource/cache.v')!
 	stat_contract := 'pub struct FileSystemStat {' + r_cache.all_after('pub struct FileSystemStat {').all_before('\npub fn sync_resource')
 	stat_dispatch := 'pub fn filesystem_stat(' + r_cache.all_after('pub fn filesystem_stat(').all_before('\n// A device aperture')
-	os.write_file(work + '/resource/statfs.v', 'module resource\n#flag -Dvinix_stack_alloc=__builtin_alloca\nfn C.vinix_stack_alloc(u64) voidptr\n' + stat_contract + stat_dispatch)!
+	os.write_file(work + '/resource/statfs.v', 'module resource\n#flag -Dvinix_stack_alloc=__builtin_alloca\nfn C.vinix_stack_alloc(usize) voidptr\n' + stat_contract + stat_dispatch)!
 	publication_extracts(root, work, fs_source)!
 	contract := fs_source.all_after('pub interface FileSystem {').all_before('\n}')
 	os.write_file(work + '/fs/contract.v', 'module fs\npub interface FileSystem {${contract}\n}\n')!
@@ -46,9 +48,11 @@ fn facade_check(root string, work string, v string) ! {
 	// fixture explicitly exercises EXPORT, so include its generated body too.
 	generated := os.read_file(work + '/adapter-linux.c')! + '\n' + os.read_file(os.dir(work) + '/protocol-linux.c')!
 	names := ['fs__nfs__Xdr_opaque', 'fs__nfs__Xdr_entry', 'fs__nfs__Client_request', 'fs__nfs__Client_call', 'fs__nfs__Client_record', 'fs__nfs__Client_read', 'fs__nfs__Client_write', 'fs__nfs__Client_getattr', 'fs__nfs__Client_readdirplus', 'fs__nfs__Client_exports', 'fs__NfsResource_read', 'fs__NfsResource_write_locked', 'fs__NfsResource_refresh_attr', 'fs__NFSFS_identity', 'fs__nfs_res', 'fs__NFSFS_destroy_failed', 'fs__NFSFS_rename_begin', 'fs__rename_before_publish', 'fs__rename_after_publish', 'resource__filesystem_stat', 'fs__NfsResource_try_filesystem_stat']
-	for name in names {
+	mut mmap_names := names.clone()
+	mmap_names << ['fs__NfsResource_mmap', 'fs__NfsResource_read_locked', 'fs__NfsResource_release_mapping', 'fs__network_mmap_page', 'fs__NetworkMmapPage_complete']
+	for name in mmap_names {
 		// V backends differ in module aliases and method-name separators.
-		modern := name.replace('Xdr_', 'Xdr__').replace('Client_', 'Client__').replace('NfsResource_', 'NfsResource__').replace('NFSFS_', 'NFSFS__')
+		modern := name.replace('Xdr_', 'Xdr__').replace('Client_', 'Client__').replace('NfsResource_', 'NfsResource__').replace('NFSFS_', 'NFSFS__').replace('NetworkMmapPage_', 'NetworkMmapPage__')
 		aliases := [name, modern, name.replace('fs__nfs__', 'nfs__'), modern.replace('fs__nfs__', 'nfs__')]
 		mut found := false
 		for line in generated.split_into_lines() {
@@ -63,5 +67,5 @@ fn facade_check(root string, work string, v string) ! {
 		if !found { return error('missing generated C definition: ' + name) }
 	}
 	println('NFS production adapter: actual FileSystem/Resource/Stat contracts, host and Linux C generation passed')
-	println('NFS generated C: no hidden allocation in ${names.len} wire/resource/publication functions')
+	println('NFS generated C: no hidden allocation in ${mmap_names.len} wire/resource/publication/mmap functions')
 }

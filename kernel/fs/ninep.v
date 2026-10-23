@@ -259,6 +259,7 @@ fn (mut res NinePResource) set_stat(attr &ninep.Attr) {
 	res.stat.dev = res.filesystem.dev
 	res.stat.ino = attr.qid.path
 	res.stat.mode = attr.mode
+	res.can_mmap = stat.isreg(res.stat.mode)
 	res.stat.uid = attr.uid
 	res.stat.gid = attr.gid
 	res.stat.nlink = attr.nlink
@@ -608,6 +609,10 @@ fn (mut backend NinePFS) rename(old_parent &VFSNode, old_name string, new_parent
 fn (mut res NinePResource) read(_ voidptr, buf voidptr, offset u64, count u64) ?i64 {
 	res.filesystem.lock.acquire()
 	defer { res.filesystem.lock.release() }
+	return res.read_locked(buf, offset, count, false)
+}
+
+fn (mut res NinePResource) read_locked(buf voidptr, offset u64, count u64, strict bool) ?i64 {
 	res.refresh_locked()?
 	if !stat.isreg(res.stat.mode) {
 		errno.set(errno.eisdir)
@@ -632,16 +637,19 @@ fn (mut res NinePResource) read(_ voidptr, buf voidptr, offset u64, count u64) ?
 		backend.error()
 		return none
 	}
+	if unit == 0 { errno.set(errno.eio); return none }
 	mut done := u64(0)
 	for done < count {
 		chunk := u32(if count - done < unit { count - done } else { unit })
 		n := backend.client.read(fid, offset + done, unsafe { &u8(u64(buf) + done) }, chunk) or {
 			backend.error()
-			if done != 0 { return i64(done) }
+			if done != 0 && !strict { return i64(done) }
 			return none
 		}
 		done += n
-		if n < chunk { break }
+		// A positive short network read need not mean EOF. A page fill keeps
+		// going; every iteration either advances or stops, bounded by count.
+		if n < chunk && (!strict || n == 0) { break }
 	}
 	return i64(done)
 }
@@ -843,7 +851,28 @@ fn (mut res NinePResource) ioctl(handle voidptr, request u64, arg voidptr) ?int 
 	return resource.default_ioctl(handle, request, arg)
 }
 
-fn (mut res NinePResource) mmap(_ voidptr, _ u64, _ int) voidptr { return unsafe { nil } }
+fn (mut res NinePResource) mmap(_ voidptr, page u64, flags int) voidptr {
+	res.filesystem.lock.acquire()
+	defer { res.filesystem.lock.release() }
+	res.refresh_locked() or { return unsafe { nil } }
+	frame := network_mmap_page(res.stat.mode, res.stat.size, page, flags) or { return unsafe { nil } }
+	if frame.count == 0 { return frame.physical }
+	got := res.read_locked(voidptr(u64(frame.physical) + higher_half), frame.offset, frame.count, true) or {
+		memory.pmm_free(frame.physical, 1)
+		return unsafe { nil }
+	}
+	return frame.complete(got)
+}
+
+fn (mut res NinePResource) retain_mapping_range(_ voidptr, _ u64, _ u64, flags int) bool {
+	return network_mmap_allowed(res.stat.mode, flags)
+}
+
+fn (mut res NinePResource) release_mapping_range(_ voidptr, _ u64, _ u64, _ int) {}
+
+fn (mut res NinePResource) release_mapping(_ voidptr, _ u64, physical voidptr, _ int) {
+	memory.pmm_free(physical, 1)
+}
 
 fn (mut res NinePResource) sync(_ voidptr) ? {
 	res.filesystem.lock.acquire()

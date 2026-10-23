@@ -1,0 +1,64 @@
+module fs
+
+import klock
+import fs.smb2
+import memory
+import memory.mmap
+import errno
+
+const page_size = u64(4096)
+const higher_half = u64(0)
+
+struct VFSNode {}
+struct SMB2FS {
+mut:
+	lock klock.Lock
+	client smb2.Client
+	uid u32
+	dev u64
+}
+fn (mut b SMB2FS) error() { errno.set(u64(if b.client.fault > 0 { b.client.fault } else { 5 })) }
+
+fn test_production_smb2_mapping_bytes_offsets_bounds_and_failure_cleanup() {
+	mut backend := &SMB2FS{}
+	backend.client.lock = &backend.lock
+	mut r := &SMB2Resource{backend: backend}
+	for attributes in [u32(0), 16, 0x400, 0x410] {
+		attr := smb2.Attr{attributes: attributes}
+		r.set_stat(unsafe { &attr })
+		assert r.can_mmap == (attributes == 0)
+	}
+	r.set_stat(unsafe { &backend.client.attr })
+	baseline := memory.live_pages()
+	for page in [u64(0), 1, 2] {
+		physical := r.mmap(unsafe { nil }, page, mmap.map_private)
+		assert physical != unsafe { nil }
+		for i in 0 .. 4096 {
+			at := page * 4096 + u64(i)
+			assert unsafe { &u8(physical)[i] } == if at < 4125 { u8(at % 251) } else { u8(0) }
+		}
+		r.release_mapping(unsafe { nil }, page, physical, mmap.map_private)
+		assert memory.live_pages() == baseline && backend.client.handles == 0
+	}
+	assert backend.client.reads == 17
+	backend.client.positive_short = true
+	short_page := r.mmap(unsafe { nil }, 0, mmap.map_private)
+	assert short_page != unsafe { nil }
+	for i in 0 .. 4096 { assert unsafe { &u8(short_page)[i] } == u8(i % 251) }
+	r.release_mapping(unsafe { nil }, 0, short_page, mmap.map_private)
+	assert memory.live_pages() == baseline && backend.client.handles == 0
+	backend.client.positive_short = false
+	backend.client.reads = 0; backend.client.fail_read = 2
+	assert r.mmap(unsafe { nil }, 0, mmap.map_private) == unsafe { nil }
+	assert errno.get() == errno.eio && memory.live_pages() == baseline && backend.client.handles == 0
+	backend.client.reads = 0; backend.client.fail_read = 0; backend.client.short_read = 2
+	assert r.mmap(unsafe { nil }, 0, mmap.map_private) == unsafe { nil }
+	assert errno.get() == errno.eio && memory.live_pages() == baseline && backend.client.handles == 0
+	assert !r.retain_mapping_range(unsafe { nil }, 0, 4096, mmap.map_shared)
+	assert errno.get() == errno.enotsup
+	backend.client.attr.attributes = 0x400
+	assert r.mmap(unsafe { nil }, 0, mmap.map_private) == unsafe { nil }
+	assert errno.get() == errno.enodev && memory.live_pages() == baseline && backend.client.handles == 0
+	assert !backend.lock.held
+	println('NETWORK-MMAP-PASS SMB2 production handler: bytes; offsets; bounded reads; directory/reparse refusal; error cleanup')
+}

@@ -4,6 +4,9 @@ module fs
 import resource
 import klock
 
+const page_size = u64(4096)
+const higher_half = u64(0)
+
 #flag -Dvinix_stack_alloc=__builtin_alloca
 
 fn C.vinix_stack_alloc(usize) voidptr

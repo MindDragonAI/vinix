@@ -356,6 +356,8 @@ fn (mut r SMB2Resource) set_stat(a &smb2.Attr) {
 		u32(stat.ifreg | 0o644)
 	}
 	if r.backend.client.readonly || a.attributes & 1 != 0 { r.stat.mode &= ~u32(0o222) }
+	// Reparse points include symlinks; never advertise them as mmapable files.
+	r.can_mmap = stat.isreg(r.stat.mode) && a.attributes & 0x400 == 0
 	r.stat.atim = smb2_time(a.accessed)
 	r.stat.mtim = smb2_time(a.written)
 	r.stat.ctim = smb2_time(a.changed)
@@ -680,6 +682,14 @@ fn (mut b SMB2FS) rename(old_parent &VFSNode, old_name string, new_parent &VFSNo
 fn (mut r SMB2Resource) read(_ voidptr, buf voidptr, offset u64, count u64) ?i64 {
 	r.backend.lock.acquire()
 	defer { r.backend.lock.release() }
+	return r.read_locked(buf, offset, count, false)
+}
+
+fn (mut r SMB2Resource) read_locked(buf voidptr, offset u64, count u64, strict bool) ?i64 {
+	if r.backend.client.max_read == 0 || r.backend.client.max_read > smb2.io_size {
+		errno.set(errno.eio)
+		return none
+	}
 	if offset > u64(0x7fffffffffffffff) {
 		errno.set(errno.eoverflow)
 		return none
@@ -705,11 +715,11 @@ fn (mut r SMB2Resource) read(_ voidptr, buf voidptr, offset u64, count u64) ?i64
 		if u64(n) > remaining { n = int(remaining) }
 		got := r.backend.client.read(id, offset + done, unsafe { &u8(u64(buf) + done) }, n) or {
 			r.backend.error()
-			if done > 0 { return i64(done) }
+			if done > 0 && !strict { return i64(done) }
 			return none
 		}
 		done += u64(got)
-		if got < n { break
+		if got < n && (!strict || got == 0) { break
 		 }
 	}
 	return i64(done)
@@ -854,8 +864,29 @@ fn (mut r SMB2Resource) ioctl(handle voidptr, request u64, arg voidptr) ?int {
 	return resource.default_ioctl(handle, request, arg)
 }
 
-fn (mut r SMB2Resource) mmap(_ voidptr, _ u64, _ int) voidptr {
-	return unsafe { nil }
+fn (mut r SMB2Resource) mmap(_ voidptr, page u64, flags int) voidptr {
+	r.backend.lock.acquire()
+	defer { r.backend.lock.release() }
+	r.refresh_locked() or { return unsafe { nil } }
+	if !r.can_mmap { errno.set(errno.enodev); return unsafe { nil } }
+	frame := network_mmap_page(r.stat.mode, r.stat.size, page, flags) or { return unsafe { nil } }
+	if frame.count == 0 { return frame.physical }
+	got := r.read_locked(voidptr(u64(frame.physical) + higher_half), frame.offset, frame.count, true) or {
+		memory.pmm_free(frame.physical, 1)
+		return unsafe { nil }
+	}
+	return frame.complete(got)
+}
+
+fn (mut r SMB2Resource) retain_mapping_range(_ voidptr, _ u64, _ u64, flags int) bool {
+	if !r.can_mmap { errno.set(errno.enodev); return false }
+	return network_mmap_allowed(r.stat.mode, flags)
+}
+
+fn (mut r SMB2Resource) release_mapping_range(_ voidptr, _ u64, _ u64, _ int) {}
+
+fn (mut r SMB2Resource) release_mapping(_ voidptr, _ u64, physical voidptr, _ int) {
+	memory.pmm_free(physical, 1)
 }
 
 // Boot pool owns resource boxes/nodes; generic VFS teardown must never free
