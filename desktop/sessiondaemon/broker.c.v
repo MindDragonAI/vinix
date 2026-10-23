@@ -140,6 +140,7 @@ pub fn run(home string, control int) {
 		policy_record.free()
 	}
 	daemon.load_services()
+	daemon.load_ssh_service()
 	os.signal_opt(.term, session_stop_signal) or {}
 	os.signal_opt(.int, session_stop_signal) or {}
 	state_path := '${home}/.vinix-notifications'
@@ -174,6 +175,7 @@ pub fn run(home string, control int) {
 		if control_live && readiness[1].revents != 0 {
 			if readiness[1].revents & (C.POLLHUP | C.POLLERR | C.POLLNVAL) != 0
 				|| !daemon.serve_request(control, control_peer, true) {
+				session_shutdown_diagnostic('control-lost-stop-services\n')
 				// No public connection can take over after EOF, a partial frame,
 				// or a timeout. Shut down services before a new broker starts.
 				control_live = false
@@ -201,6 +203,7 @@ fn (mut daemon SessionDaemon) serve_client(client int) {
 
 fn (mut daemon SessionDaemon) serve_request(client int, peer sessionipc.SessionCredentials, compositor bool) bool {
 	request := sessionipc.session_receive(client) or {
+		if compositor { session_shutdown_diagnostic('control-receive-failed\n') }
 		session_release_error(err, err.msg())
 		return false
 	}
@@ -219,6 +222,7 @@ fn (mut daemon SessionDaemon) serve_request(client int, peer sessionipc.SessionC
 		}
 	}
 	sent := sessionipc.session_send_message(client, reply)
+	if compositor && !sent { session_shutdown_diagnostic('control-send-failed\n') }
 	unsafe {
 		request.free()
 		if reply.len > 0 && reply != 'ok' && reply != 'empty' && reply != 'error\tdenied' {
@@ -226,6 +230,18 @@ fn (mut daemon SessionDaemon) serve_request(client int, peer sessionipc.SessionC
 		}
 	}
 	return sent
+}
+
+// Disposable-qualification diagnostic: labels contain no request or user data.
+fn session_shutdown_diagnostic(label string) {
+	$if ssh_transfer_diagnostics ? {
+		fd := C.open(c'/dev/com1', C.O_WRONLY | C.O_NOCTTY)
+		if fd < 0 { return }
+		prefix := 'M16B3-BROKER '
+		C.write(fd, prefix.str, usize(prefix.len))
+		C.write(fd, label.str, usize(label.len))
+		C.close(fd)
+	}
 }
 
 fn (mut daemon SessionDaemon) services_tick() {

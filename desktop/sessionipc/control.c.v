@@ -8,6 +8,8 @@ import desktop.sessioncore
 __global session_control_fd int
 __global session_control_owner int
 __global session_control_pending bool
+// A request was sent, but no byte of its reply header arrived yet.
+__global session_control_reply_pending bool
 
 fn C.socketpair(i32, i32, i32, &i32) i32
 fn C.getppid() int
@@ -22,6 +24,7 @@ pub fn session_close_control() {
 	session_control_fd = 0
 	session_control_owner = 0
 	session_control_pending = false
+	session_control_reply_pending = false
 }
 
 // A broker accepts only a connected stream inherited from its launching parent.

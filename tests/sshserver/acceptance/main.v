@@ -1,0 +1,144 @@
+// SPDX-License-Identifier: GPL-2.0-or-later
+// Disposable fecv3 callback for the encrypted-HOME SSH controller.
+module main
+
+import os
+import time
+import crypto.sha256
+
+fn step(dir string, name string, args []string, expected int, input string) !string {
+	start := time.sys_mono_now()
+	// Keep verbose OpenSSH output out of unread pipes while waiting.
+	command := ['timeout', '-k', '3', '900', ...args].map(os.quoted_path(it)).join(' ')
+	result := os.execute(command + ' < ' + os.quoted_path(if input == '' { '/dev/null' } else { input })
+		+ ' > ' + os.quoted_path(dir + '/' + name + '.stdout')
+		+ ' 2> ' + os.quoted_path(dir + '/' + name + '.stderr'))
+	// Preserve the original stdout-first contract. OpenSSH warnings on stderr
+	// must not turn a correct guest checksum into a false prefix mismatch.
+	text := os.read_file(dir + '/' + name + '.stdout')! + os.read_file(dir + '/' + name + '.stderr')!
+	os.write_file(dir + '/' + name + '.log', text)!
+	os.write_file(dir + '/' + name + '.exit', result.exit_code.str() + '\n')!
+	elapsed := time.sys_mono_now() - start
+	os.write_file(dir + '/' + name + '.elapsed_ns', elapsed.str() + '\n')!
+	println('M16B-GUEST ${name} exit=${result.exit_code} expected=${expected} elapsed_ms=${elapsed/1000000}')
+	if result.exit_code != expected { return error('${name} failed') }
+	return text
+}
+
+fn main() { qualify() or { eprintln('M16B-GUEST FAIL: ${err}'); exit(1) } }
+
+fn hash_file(path string) !string {
+	mut file := os.open(path)!
+	defer { file.close() }
+	mut digest := sha256.new()
+	mut buffer := []u8{len: 1024 * 1024}
+	for {
+		n := file.read(mut buffer) or { break }
+		if n == 0 { break }
+		digest.write(buffer[..n])!
+	}
+	return digest.sum([]u8{}).hex()
+}
+
+fn qualify() ! {
+	root := os.getenv('SSH_RUN_DIR')
+	if root == '' || !os.is_dir(root) { return error('controller run directory required') }
+	dir := root + '/acceptance'
+	if os.exists(dir) { return error('receipts already exist; do not repeat') }
+	os.mkdir(dir)!
+	port := os.getenv('SSH_PORT')
+	key := os.getenv('SSH_KEY')
+	if port != '22289' || key == '' { return error('unexpected endpoint') }
+	known := step(dir, 'host-key-scan', ['ssh-keyscan', '-T', '5', '-p', port, '-t', 'ed25519', '127.0.0.1'], 0, '')!
+	lines := known.split_into_lines().filter(it.starts_with('[127.0.0.1]:22289 ssh-ed25519 '))
+	if lines.len != 1 { return error('host key scan ambiguous') }
+	os.write_file(dir + '/known_hosts', lines[0] + '\n')!
+	options := ['-F', '/dev/null', '-o', 'BatchMode=yes', '-o', 'IdentitiesOnly=yes', '-o', 'IdentityAgent=none',
+		'-o', 'ConnectTimeout=5', '-o', 'StrictHostKeyChecking=yes', '-o', 'UserKnownHostsFile=' + dir + '/known_hosts']
+	ssh := ['ssh', ...options, '-p', port, '-i', key]
+	target := 'm16b@127.0.0.1'
+	if os.getenv('SSH_STAGE2_ONLY') != '1' {
+	text := step(dir, 'exec', [...ssh, target, 'echo OK'], 0, '')!
+	if !text.split_into_lines().any(it.trim_space() == 'OK') { return error('exec marker absent') }
+	_ := step(dir, 'exec-status', [...ssh, target, 'echo EXEC_STDERR >&2; exit 7'], 7, '')!
+	mounts := step(dir, 'post-unlock-mount-and-broker', [...ssh, target,
+		'cat /proc/self/mounts; cat /root/.vinix-service-logs/ssh-server.log; echo M16B-SSH-EXEC-OK > /dev/com1'], 0, '')!
+	if !mounts.contains('/dev/mapper/vinix63 /root ext2') || !mounts.contains('vinix-sshd: listening') {
+		return error('encrypted mount or broker start receipt absent')
+	}
+	os.write_file(dir + '/shell-input', 'tty\necho M16B_SHELL_OK\nexit\n')!
+	os.setenv('TERM', 'xterm', true)
+	shell := step(dir, 'shell-pty', [...ssh, '-tt', target], 0, dir + '/shell-input')!
+	if !shell.contains('M16B_SHELL_OK') || !shell.contains('/dev/pts/') { return error('real PTY shell not proven') }
+	for i in 0 .. 20 {
+		result := step(dir, 'sequential-${i}', [...ssh, target, 'echo SESSION-${i}'], 0, '')!
+		if !result.contains('SESSION-${i}') { return error('sequential output absent') }
+	}
+	_ := step(dir, 'wrong-keygen', ['ssh-keygen', '-q', '-t', 'ed25519', '-N', '', '-f', dir + '/wrong'], 0, '')!
+	wrong := step(dir, 'wrong-key', ['ssh', ...options, '-p', port, '-i', dir + '/wrong', target, 'true'], 255, '')!
+	if !wrong.contains('Permission denied (publickey)') { return error('wrong key not cleanly rejected') }
+	no_key_reply := step(dir, 'no-key', ['ssh', ...options, '-p', port, '-o', 'PubkeyAuthentication=no', target, 'true'], 255, '')!
+	if !no_key_reply.contains('Permission denied (publickey)') { return error('no key not cleanly rejected') }
+	}
+	if os.getenv('SSH_STAGE2_LOOPBACK') == '1' {
+		probe := step(dir, 'postunlock-loopback', [...ssh, target, '/usr/bin/vinix-desktop --postunlock-probe'], 0, '')!
+		if !probe.contains('M16B2-POSTUNLOCK: CONNECT_SUCCESS unlocked_HOME=true') { return error('loopback receipt absent') }
+	}
+	scp := ['scp', '-S', '/home/agent/build/m16b3-receipts/debug-ssh', '-O', ...options, '-P', port, '-i', key]
+	if os.getenv('SSH_STAGE2_BENCH') == '1' {
+		_ := step(dir, 'bench-upload', [...scp, '/home/agent/build/m16b2-receipts/aes-bench', target + ':/tmp/m16b2-aes-bench'], 0, '')!
+		_ := step(dir, 'bench-guest', [...ssh, target, '/tmp/m16b2-aes-bench'], 0, '')!
+	}
+	source := '/home/agent/build/m16b-receipts/host-interop-r1/large'
+	if os.file_size(source) != 50 * 1024 * 1024 { return error('50 MiB source checkpoint missing') }
+	a := hash_file(source)!
+	if a != 'e35db3f4d24be1f8c653f7980519cf4ec475fc2edddab49b566bffd30276869e' { return error('source differs from known SHA256') }
+	if os.getenv('SSH_STAGE2_DIAGNOSTICS') == '1' {
+		_ := step(dir, 'start-perf-sampler', [...ssh, target,
+			'setsid /usr/bin/vinix-desktop --perf-sampler </dev/null >/dev/null 2>&1 &'], 0, '')!
+	}
+	_ := step(dir, 'scp-upload-50m', [...scp, source, target + ':/root/home/m16b/large-copy'], 0, '') or {
+		step(dir, 'upload-failure-diagnostics', [...ssh, target,
+			'cat /root/.vinix-service-logs/ssh-server.log; ls -l /root/home/m16b/large-copy; cat /proc/meminfo'], 0, '') or {}
+		return err
+	}
+	throughput(dir, 'scp-upload-50m', os.file_size(source))!
+	remote := step(dir, 'remote-sha256', [...ssh, target, 'sha256sum /root/home/m16b/large-copy'], 0, '')!
+	_ := step(dir, 'scp-download-50m', [...scp, target + ':/root/home/m16b/large-copy', dir + '/roundtrip'], 0, '')!
+	throughput(dir, 'scp-download-50m', os.file_size(source))!
+	b := hash_file(dir + '/roundtrip')!
+	os.write_file(dir + '/large-sha256.txt', 'source ${a}\nroundtrip ${b}\nremote ' + remote)!
+	if a != b || !remote.starts_with(a + ' ') { return error('large SCP checksum mismatch') }
+	os.mkdir_all(dir + '/tree/nested')!
+	os.write_file(dir + '/tree/nested/marker', 'M16B recursive SCP\n')!
+	os.write_file(dir + '/tree/top', 'M16B2 top-level file\n')!
+	os.write_file(dir + '/tree/nested/empty', '')!
+	_ := step(dir, 'scp-recursive-upload', [...scp, '-r', dir + '/tree', target + ':/root/home/m16b/tree'], 0, '')!
+	for name in ['top', 'nested/marker', 'nested/empty'] {
+		hash := hash_file(dir + '/tree/' + name)!
+		remote_hash := step(dir, 'tree-guest-hash-' + name.replace('/', '-'), [...ssh, target,
+			'sha256sum /root/home/m16b/tree/' + name], 0, '')!
+		if !remote_hash.starts_with(hash + ' ') { return error('recursive guest hash mismatch') }
+	}
+	_ := step(dir, 'scp-recursive-download', [...scp, '-r', target + ':/root/home/m16b/tree', dir + '/returned'], 0, '')!
+	for name in ['top', 'nested/marker', 'nested/empty'] {
+		if hash_file(dir + '/tree/' + name)! != hash_file(dir + '/returned/' + name)! { return error('recursive readback differs') }
+	}
+	_ := step(dir, 'post-transfer-exec', [...ssh, target, 'echo AFTER_SCP_OK'], 0, '')!
+	sustained := step(dir, 'sustained-session', [...ssh, target,
+		'echo M16B3_SESSION_BEGIN; sleep 210; echo M16B3_SESSION_AFTER'], 0, '')!
+	if !sustained.contains('M16B3_SESSION_BEGIN') || !sustained.contains('M16B3_SESSION_AFTER') {
+		return error('sustained post-transfer session failed')
+	}
+	os.write_file(dir + '/PASS', 'M16B_GUEST_ACCEPTANCE_PASS\n')!
+	println('M16B_GUEST_ACCEPTANCE_PASS')
+}
+
+fn throughput(dir string, name string, bytes u64) ! {
+	ns := os.read_file(dir + '/' + name + '.elapsed_ns')!.trim_space().u64()
+	if ns == 0 { return error('invalid elapsed time') }
+	rate := f64(bytes) * 1000.0 / f64(ns)
+	text := '${name} bytes=${bytes} seconds=${f64(ns)/1e9:.3f} MB/s=${rate:.3f}\n'
+	os.write_file(dir + '/' + name + '.throughput', text)!
+	print(text)
+}
