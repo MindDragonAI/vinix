@@ -2,6 +2,27 @@ module main
 
 import os
 
+fn test_pty_request_without_term_uses_default_and_still_checks_framing() {
+	for term in ['', 'xterm-256color', 'bad\x00terminal'] {
+		mut packet := channel_message(98, 0)
+		put_string(mut packet, 'pty-req'.bytes())
+		packet << u8(0) // no reply: exercise the request without a network peer
+		put_string(mut packet, term.bytes())
+		for _ in 0 .. 4 { put_u32(mut packet, 0) }
+		put_string(mut packet, []u8{})
+		mut channel := Channel{opened: true}
+		mut transport := Transport{}
+		assert transport.handle_channel(mut channel, Config{}, packet)!
+		if term.contains('\x00') {
+			assert !channel.pty
+		} else {
+			assert channel.pty && channel.rows == 24 && channel.columns == 80
+			assert channel.term == if term == '' { 'xterm' } else { term }
+		}
+	}
+	println('SSH-PTY request PASS empty/default, explicit terminal, NUL rejection')
+}
+
 fn test_channel_input_copies_borrowed_packet_and_reuses_bounded_storage() {
 	mut c := Channel{ opened: true, started: true, pending: []u8{cap: channel_window} }
 	defer { unsafe { c.pending.free() } }

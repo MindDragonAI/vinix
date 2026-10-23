@@ -294,6 +294,11 @@ fn (mut this Ptmx) open(_flags int) ?&resource.Resource {
 	}
 	initialise_stat(mut master.stat, 0o666)
 	initialise_stat(mut slave.stat, 0o620)
+	// grantpt() on musl relies on the kernel to assign the slave to its
+	// allocator. A root-owned 0620 node cannot be opened by an ordinary user.
+	process := proc.current_thread().process
+	slave.stat.uid = process.euid
+	slave.stat.gid = process.egid
 	// Boxes of the endpoints themselves, so that the handles share their
 	// event, status and refcount with the pair: boxing *master would box a
 	// copy. destroy_pair() frees them.

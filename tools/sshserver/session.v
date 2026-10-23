@@ -178,10 +178,13 @@ fn (mut t Transport) handle_channel(mut c Channel, config Config, packet []u8) !
 						}
 						_ := mr.uint()!
 					}
-					if !c.started && !c.pty && ended && term.len > 0 && !term.contains('\x00')
+					if !c.started && !c.pty && ended && !term.contains('\x00')
 						&& rows <= 65535 && columns <= 65535 && width <= 65535 && height <= 65535 {
 						c.pty = true
-						c.term = term
+						// OpenSSH sends an empty terminal type when TERM is unset,
+						// including the acceptance worker's stripped environment.
+						// Keep the channel's default in that case.
+						if term.len > 0 { c.term = term }
 						c.rows = if rows == 0 { 24 } else { int(rows) }
 						c.columns = if columns == 0 { 80 } else { int(columns) }
 						c.width = int(width)
