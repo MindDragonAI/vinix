@@ -33,6 +33,7 @@ mut:
 	lock klock.Lock
 	client nfs.Client
 	box &FileSystem = unsafe { nil }
+	filesystem_value FileSystem
 	stream &inet.InetSocket = unsafe { nil }
 	socket &sockpub.Socket = unsafe { nil }
 	io_handle file.Handle
@@ -48,11 +49,19 @@ mut:
 	mounted bool
 	pool_slot int
 	resources [nfs_nodes]&NfsResource
+	resource_pool &NfsResourcePool = unsafe { nil }
 	node_count int
 	name_max u32 = 255
 	epoch u64
 	listing &u8 = unsafe { nil }
 	cookies &u64 = unsafe { nil }
+}
+
+// Allocated once on first node admission, never moved or reused after publish.
+// Keeping it separate leaves templates and rejected mounts small.
+struct NfsResourcePool {
+mut:
+	nodes [nfs_nodes]NfsResource
 }
 
 @[heap]
@@ -66,6 +75,7 @@ pub mut:
 	can_mmap bool
 mut:
 	box &resource.Resource = unsafe { nil }
+	resource_value resource.Resource
 	backend &NFSFS = unsafe { nil }
 	node &VFSNode = unsafe { nil }
 	handle nfs.FileHandle
@@ -89,7 +99,8 @@ fn (mut template NFSFS) instantiate() &FileSystem {
 	b.pool_slot = slot
 	b.client.xid = 1; b.client.rsize = nfs.io_max; b.client.wsize = nfs.io_max
 	b.name_max = 255
-	b.box = &FileSystem(b)
+	b.filesystem_value = FileSystem(b)
+	b.box = unsafe { &b.filesystem_value }
 	nfs_pool[slot] = b
 	return b.box
 }
@@ -158,14 +169,16 @@ fn (mut b NFSFS) destroy_failed() {
 			if voidptr(node) != voidptr(b.root) { unsafe { node.name.free() } }
 			memory.free(node)
 		}
-		memory.free(r.box); memory.free(r)
 	}
 	memory.free(b.client.tx); memory.free(b.client.rx)
 	memory.free(b.listing); memory.free(b.cookies)
 	nfs_pool_lock.acquire()
 	if voidptr(nfs_pool[b.pool_slot]) == voidptr(b) { nfs_pool[b.pool_slot] = unsafe { nil } }
 	nfs_pool_lock.release()
-	memory.free(b.box); memory.free(b)
+	// Resource/FileSystem values and concrete slots are interior borrowers.
+	// Every private node/map/name has gone before its pool and owner.
+	memory.free(b.resource_pool)
+	memory.free(b)
 	errno.set(saved)
 }
 
@@ -270,11 +283,20 @@ fn (mut r NfsResource) set_stat(a nfs.Attr) {
 // cloned here. The VFS creates dots for its own nodes after successful return.
 fn (mut b NFSFS) make_node(parent &VFSNode, name string, h nfs.FileHandle, ph nfs.FileHandle, a nfs.Attr, owned bool) ?&VFSNode {
 	if b.node_count >= nfs_nodes { errno.set(errno.enospc); return none }
-	mut r := &NfsResource{backend: b, handle: h, parent_handle: ph, refcount: 1, status: if b.client.ro { 1 } else { 5 }}
+	if b.resource_pool == unsafe { nil } {
+		b.resource_pool = unsafe { &NfsResourcePool(memory.malloc_packed_fallible(sizeof(NfsResourcePool))) }
+		if b.resource_pool == unsafe { nil } { errno.set(errno.enomem); return none }
+		// Do not construct a 512-record temporary on the kernel stack.
+		C.memset(b.resource_pool, 0, sizeof(NfsResourcePool))
+	}
+	mut r := unsafe { &b.resource_pool.nodes[b.node_count] }
+	r.backend = b
+	r.handle = h; r.parent_handle = ph
+	r.refcount = 1; r.status = if b.client.ro { 1 } else { 5 }
 	r.set_stat(a)
-	// Successful resources are boot-retained. Do not suppress their allocation
-	// warning as "freed"; only unpublished mount failures reclaim this box.
-	r.box = &resource.Resource(r)
+	// Initialize metadata after set_stat, once, in stable owner storage.
+	r.resource_value = resource.Resource(r)
+	r.box = unsafe { &r.resource_value }
 	owned_name := if owned { name } else { name.clone() }
 	mut node := create_node(b.box, parent, owned_name, a.kind == 2)
 	node.resource = r.box; node.read_only = b.client.ro

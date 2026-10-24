@@ -23,9 +23,11 @@ const smb2_sessions = 4
 pub struct SMB2FS {
 mut:
 	box        &FileSystem = unsafe { nil }
+	filesystem_value FileSystem
 	lock       klock.Lock
 	client     smb2.Client
 	socket     &sockpub.Socket  = unsafe { nil }
+	socket_value sockpub.Socket
 	stream     &inet.InetSocket = unsafe { nil }
 	handle     file.Handle
 	tx         [smb2.capacity]u8
@@ -59,6 +61,7 @@ pub mut:
 mut:
 	backend     &SMB2FS            = unsafe { nil }
 	box         &resource.Resource = unsafe { nil }
+	resource_value resource.Resource
 	node        &VFSNode           = unsafe { nil }
 	path        [smb2.max_path]u8
 	length      int
@@ -68,7 +71,10 @@ mut:
 }
 
 fn (mut b SMB2FS) as_filesystem() &FileSystem {
-	if b.box == unsafe { nil } { b.box = &FileSystem(b) }
+	if b.box == unsafe { nil } {
+		b.filesystem_value = FileSystem(unsafe { &b })
+		b.box = unsafe { &b.filesystem_value }
+	}
 	return b.box
 }
 
@@ -144,17 +150,15 @@ fn smb2_transfer(context voidptr, p &u8, n int, sending bool) bool {
 
 fn (mut b SMB2FS) destroy_private() {
 	// InetSocket.unref owns its resource.Resource box and concrete socket.
-	// This adapter's separate sockpub.Socket interface box is ours to free.
+	// The adapter Socket value is interior storage, borrowed until owner free.
 	if b.socket != unsafe { nil } {
 		b.socket.unref(unsafe { &b.handle }) or {}
-		memory.free(b.socket)
 	}
 	krandom.explicit_bzero(unsafe { &b.credential[0] }, sizeof(b.credential))
 	krandom.explicit_bzero(unsafe { &b.client.key[0] }, sizeof(b.client.key))
 	krandom.explicit_bzero(unsafe { &b.tx[0] }, sizeof(b.tx))
 	krandom.explicit_bzero(unsafe { &b.rx[0] }, sizeof(b.rx))
 	krandom.explicit_bzero(unsafe { &b.scratch[0] }, sizeof(b.scratch))
-	memory.free(b.box)
 	memory.free(b)
 }
 
@@ -231,9 +235,12 @@ fn (mut b SMB2FS) mount_specifier(parent &VFSNode, name string, source string, f
 		}
 	}
 	b.stream = inet.create(sockpub.sock_stream, 6) or { return none }
+	// No descriptor owns this private stream; the backend drops this reference.
+	b.stream.refcount = 1
 	b.stream.set_timeout(true, 5_000_000_000)
 	b.stream.set_timeout(false, 5_000_000_000)
-	b.socket = &sockpub.Socket(b.stream)
+	b.socket_value = sockpub.Socket(b.stream)
+	b.socket = unsafe { &b.socket_value }
 	mut endpoint := inet.SockaddrIn{
 		sin_family: 2
 		sin_port:   0xbd01
@@ -384,7 +391,8 @@ fn (mut b SMB2FS) make_node(parent &VFSNode, name string, path string, a &smb2.A
 	r.set_stat(a)
 	mut node := create_node(b.as_filesystem(), parent, name, stat.isdir(r.stat.mode))
 	r.node = node
-	r.box = &resource.Resource(r)
+	r.resource_value = resource.Resource(r)
+	r.box = unsafe { &r.resource_value }
 	node.resource = r.box
 	node.read_only = b.client.readonly
 	// The boot cache, rather than generic orphan teardown, owns this node.

@@ -14,6 +14,9 @@ import ioctl
 import time
 import usercopy
 import lib
+import fs.ninep
+import fs.smb2
+import fs.nfs
 
 pub const at_fdcwd = -100
 pub const at_empty_path = 0x1000
@@ -96,6 +99,12 @@ __global (
 	children_lock klock.Lock
 	vfs_root    &VFSNode
 	filesystems map[string]&FileSystem
+	ninep_template NinePFS
+	smb2_template SMB2FS
+	nfs_template NFSFS
+	ninep_template_value FileSystem
+	smb2_template_value FileSystem
+	nfs_template_value FileSystem
 )
 
 // Protect map storage separately from the VFS writer lock. Path walkers also
@@ -173,9 +182,23 @@ pub fn initialise() {
 	filesystems['procfs'] = &ProcFS{}
 	filesystems['sysfs'] = &SysFS{}
 	filesystems['cgroup2'] = &CGroupFS{}
-	filesystems['9p'] = &NinePFS{}
-	filesystems['smb2'] = &SMB2FS{}
-	filesystems['nfs'] = &NFSFS{}
+	// Both concrete templates and their interface values have boot lifetime.
+	// The registry borrows these addresses; taking &FileSystem would box again.
+	// Globals already supply zero/nil storage. Initialize the nonzero and
+	// aggregate defaults in place, without a large concrete stack temporary.
+	ninep_template.client.msize = ninep.max_msize
+	ninep_template.tag = ''
+	smb2_template.client = smb2.Client{}
+	smb2_template.handle = file.Handle{}
+	nfs_template.client = nfs.Client{}
+	nfs_template.io_handle = file.Handle{}
+	nfs_template.name_max = 255
+	ninep_template_value = FileSystem(unsafe { &ninep_template })
+	smb2_template_value = FileSystem(unsafe { &smb2_template })
+	nfs_template_value = FileSystem(unsafe { &nfs_template })
+	filesystems['9p'] = unsafe { &ninep_template_value }
+	filesystems['smb2'] = unsafe { &smb2_template_value }
+	filesystems['nfs'] = unsafe { &nfs_template_value }
 	init_mount_tables()
 }
 
